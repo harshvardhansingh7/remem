@@ -2,7 +2,7 @@ from typing import Any, Callable, Optional
 from uuid import UUID
 
 from remem.models.execution_record import ExecutionRecord
-from remem.reuse.engine import ReuseEngine, ReuseOutcome
+from remem.reuse.engine import ReuseDecision, ReuseEngine, ReuseOutcome
 from remem.similarity.engine import SimilarityEngine
 from remem.storage.in_memory_storage import InMemoryStorage
 from remem.storage.storage import StorageInterface
@@ -36,7 +36,8 @@ class Client:
             response_reuse_threshold=response_reuse_threshold,
         )
 
-        if outcome.decision.value == "MISS":
+        # Stricter Enum evaluation bypassing string values
+        if outcome.decision is ReuseDecision.MISS:
             self._misses += 1
 
         return outcome

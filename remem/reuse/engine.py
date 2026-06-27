@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
 from uuid import uuid4
@@ -10,25 +11,19 @@ from remem.storage.storage import StorageInterface
 
 class ReuseDecision(Enum):
     RESPONSE_REUSED = "RESPONSE_REUSED"
-    RETRIEVAL_REUSED = "RETRIEVAL_REUSED"
+    RETRIEVAL_USED = "RETRIEVAL_REUSED"
     COMPUTED = "COMPUTED"
     MISS = "MISS"
 
 
+@dataclass
 class ReuseOutcome:
     """Encapsulates structural reuse planner decisions."""
 
-    def __init__(
-        self,
-        result: Any,
-        decision: ReuseDecision,
-        similarity_score: float,
-        references: Optional[list[str]] = None,
-    ):
-        self.result = result
-        self.decision = decision
-        self.similarity_score = similarity_score
-        self.references = references or []
+    result: Any
+    decision: ReuseDecision
+    similarity_score: float
+    references: list[str] = field(default_factory=list)
 
 
 class ReuseEngine:
