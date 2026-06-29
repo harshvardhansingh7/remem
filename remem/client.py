@@ -7,20 +7,21 @@ from remem.models.execution_result import ExecutionResult
 from remem.reuse.policy import ReusePolicy
 from remem.reuse.engine import ReuseEngine, ReuseOutcome
 from remem.similarity.engine import SimilarityEngine
-from remem.storage.in_memory_storage import InMemoryStorage
 from remem.storage.storage import StorageInterface
+from remem.storage.json_storage import JsonStorage
 from remem.metrics.collector import MetricsCollector
 
 
 class Client:
-    """Public facade orchestrating the policy engine and observability collector."""
+    """Public facade coordinating policy engines, telemetry, and durable storage layers."""
 
     def __init__(
         self,
         storage_backend: Optional[StorageInterface] = None,
         policy: Optional[ReusePolicy] = None,
     ):
-        self.storage: StorageInterface = storage_backend or InMemoryStorage()
+        # Default directly to file-backed JSON persistence or use an injected backend
+        self.storage: StorageInterface = storage_backend or JsonStorage()
         self.similarity = SimilarityEngine()
         self.policy = policy or ReusePolicy()
         self.metrics = MetricsCollector()
@@ -51,3 +52,17 @@ class Client:
 
     def all(self) -> list[ExecutionRecord]:
         return self.storage.all()
+
+    def save_snapshot(self) -> None:
+        """Explicitly serializes internal working tables to durable disk files."""
+        if hasattr(self.storage, "save"):
+            getattr(self.storage, "save")()
+
+    def load_snapshot(self) -> None:
+        """Explicitly synchronizes working tables from disk files."""
+        if hasattr(self.storage, "load"):
+            getattr(self.storage, "load")()
+
+    def flush_storage(self) -> None:
+        """Clears all records from persistence."""
+        self.storage.flush()
