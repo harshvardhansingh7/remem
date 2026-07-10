@@ -88,7 +88,7 @@ Remem has a single runtime dependency (`numpy`), which is installed automaticall
 <summary>Installing from source</summary>
 
 ```bash
-git clone https://github.com/harshvardhansingh7/remem.git
+git clone https://github.com/hrsvd/remem.git
 cd remem
 pip install -e ".[dev]"    # editable install with pytest and ruff
 ```
