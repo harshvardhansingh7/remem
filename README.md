@@ -8,7 +8,7 @@
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10+-blue.svg">
-  <img alt="Version" src="https://img.shields.io/badge/Version-v1.1.0--dev-orange">
+  <img alt="Version" src="https://img.shields.io/badge/Version-v1.1.0.dev1-orange">
   <img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-green.svg">
   <img alt="PyPI" src="https://img.shields.io/badge/PyPI-remem--ai-blue">
 </p>
@@ -124,13 +124,20 @@ New to Remem? Start with the [5-minute Quickstart](docs/QuickStart.md). For the 
 
 ### Optional ANN search
 
-Exact cosine search remains the default and is best for small caches or when every result must be exhaustive. For larger caches, enable the optional HNSW backend:
+`auto` is the default: it uses HNSW when the optional dependency is installed and otherwise falls back to exact cosine. You can also force either strategy:
 
 ```python
 from remem import AnnConfig, Client
 
-client = Client(similarity_backend="hnsw", ann_config=AnnConfig(ef_search=100))
+client = Client()  # auto
+exact_client = Client(search_mode="exact_cosine")
+hnsw_client = Client(
+    search_mode="hnsw_cosine",
+    ann_config=AnnConfig(ef_search=100),
+)
 ```
+
+Inspect `client.resolved_search_mode` and `client.search_fallback_reason` to see what `auto` selected. Forced HNSW mode fails with an installation hint when the ANN extra is unavailable. The older `similarity_backend="exact"|"hnsw"` argument remains temporarily supported with a deprecation warning.
 
 ANN returns the same cosine-similarity score semantics as exact search (`-1.0` to `1.0`); Remem converts the index distance before applying reuse thresholds. The index is derived from stored records and rebuilt automatically after storage reloads or record updates, so no separate index file is persisted. Higher `ef_search` improves recall at the cost of query latency.
 
