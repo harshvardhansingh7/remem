@@ -36,8 +36,8 @@ This roadmap outlines the long-term vision for Remem. The project is developed i
 - Python 3.10 coverage in CI
 
 *Performance*
-- Optional HNSW cosine search with rebuildable in-memory indexes (`1.1.0.dev0`)
-- User-oriented automatic and exact/HNSW search modes
+- Optional HNSW cosine search with rebuildable in-memory indexes (`1.1.0.dev0`, completed)
+- User-oriented automatic and exact/HNSW search modes (`1.1.0.dev1`, completed)
 - Exact cosine reranking of ANN candidates
 - Record-ID lookup without query-time full storage scans
 - Incremental and persistent ANN indexes with consistency recovery

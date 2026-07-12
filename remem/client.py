@@ -1,3 +1,4 @@
+import warnings
 from typing import Callable, Literal, Optional
 from uuid import UUID
 
@@ -9,6 +10,7 @@ from remem.reuse.engine import ReuseEngine, ReuseOutcome
 from remem.reuse.policy import ReusePolicy
 from remem.similarity.engine import SimilarityEngine
 from remem.similarity.index import AnnConfig
+from remem.similarity.mode import SearchMode, SearchModeResolution, resolve_search_mode
 from remem.storage.json_storage import JsonStorage
 from remem.storage.storage import StorageInterface
 
@@ -20,12 +22,38 @@ class Client:
         self,
         storage_backend: Optional[StorageInterface] = None,
         policy: Optional[ReusePolicy] = None,
-        similarity_backend: Literal["exact", "hnsw"] = "exact",
+        similarity_backend: Optional[Literal["exact", "hnsw"]] = None,
         ann_config: Optional[AnnConfig] = None,
+        *,
+        search_mode: SearchMode | str = SearchMode.AUTO,
     ):
         # Default directly to file-backed JSON persistence or use an injected backend
         self.storage: StorageInterface = storage_backend or JsonStorage()
-        self.similarity = SimilarityEngine(similarity_backend, ann_config)
+        if similarity_backend is not None:
+            if similarity_backend not in ("exact", "hnsw"):
+                raise ValueError("similarity_backend must be either 'exact' or 'hnsw'.")
+            if search_mode not in (SearchMode.AUTO, SearchMode.AUTO.value):
+                raise ValueError(
+                    "search_mode and the deprecated similarity_backend cannot "
+                    "be configured together."
+                )
+            warnings.warn(
+                "similarity_backend is deprecated; use search_mode='exact_cosine' "
+                "or search_mode='hnsw_cosine' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            search_mode = {
+                "exact": SearchMode.EXACT_COSINE,
+                "hnsw": SearchMode.HNSW_COSINE,
+            }[similarity_backend]
+
+        resolution, backend = resolve_search_mode(search_mode)
+        self.search_resolution: SearchModeResolution = resolution
+        self.search_mode = resolution.requested
+        self.resolved_search_mode = resolution.resolved
+        self.search_fallback_reason = resolution.fallback_reason
+        self.similarity = SimilarityEngine(backend, ann_config)
         self.policy = policy or ReusePolicy()
         self.metrics = MetricsCollector()
         self.reuse_planner = ReuseEngine(

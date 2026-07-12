@@ -26,11 +26,12 @@ from remem.models.execution_result import ExecutionResult
 from remem.reuse.decision import ReuseDecision, ReuseOutcome
 from remem.reuse.policy import ReusePolicy
 from remem.similarity.index import AnnConfig
+from remem.similarity.mode import SearchMode, SearchModeResolution
 from remem.storage.json_storage import JsonStorage
 from remem.storage.memory_storage import InMemoryStorage
 from remem.storage.storage import StorageInterface
 
-__version__ = "1.1.0.dev0"
+__version__ = "1.1.0.dev1"
 
 __all__ = [
     # Core facade
@@ -45,6 +46,8 @@ __all__ = [
     "ReuseDecision",
     # Similarity search
     "AnnConfig",
+    "SearchMode",
+    "SearchModeResolution",
     # Storage backends
     "StorageInterface",
     "JsonStorage",

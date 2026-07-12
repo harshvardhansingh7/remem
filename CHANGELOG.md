@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.1.0.dev0] - Unreleased
+## [1.1.0.dev1] - Unreleased
+
+### Added
+
+- Public `auto`, `exact_cosine`, and `hnsw_cosine` search modes.
+- Observable automatic-mode resolution through `Client.resolved_search_mode`,
+  `Client.search_fallback_reason`, and `Client.search_resolution`.
+
+### Changed
+
+- `auto` is the default search mode. It uses HNSW when the optional USearch
+  dependency is installed and otherwise falls back to exact cosine search.
+- The legacy `similarity_backend` argument remains compatible and now emits a
+  `DeprecationWarning` in favor of `search_mode`.
+
+---
+
+## [1.1.0.dev0] - 2026-07-12
 
 ### Added
 

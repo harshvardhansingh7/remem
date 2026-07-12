@@ -105,7 +105,7 @@ def test_hnsw_rebuilds_from_persisted_storage() -> None:
         storage.put(stored)
 
         reloaded = JsonStorage(filepath)
-        client = Client(storage_backend=reloaded, similarity_backend="hnsw")
+        client = Client(storage_backend=reloaded, search_mode="hnsw_cosine")
 
         outcome = client.check([1.0, 0.0])
         assert outcome.matched_record_id == stored.id
@@ -128,11 +128,9 @@ def test_forced_hnsw_reports_how_to_install_missing_dependency(monkeypatch) -> N
         SimilarityEngine("hnsw")
 
 
-def test_default_client_search_remains_exact_without_ann_dependency_configuration() -> (
-    None
-):
+def test_explicit_exact_client_search_remains_compatible() -> None:
     stored = record([1.0, 0.0], "legacy")
-    client = Client(storage_backend=InMemoryStorage())
+    client = Client(storage_backend=InMemoryStorage(), search_mode="exact_cosine")
     client.store(stored)
 
     assert client.similarity.backend == "exact"

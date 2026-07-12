@@ -28,8 +28,10 @@ from remem import Client
 Client(
     storage_backend: StorageInterface | None = None,
     policy: ReusePolicy | None = None,
-    similarity_backend: Literal["exact", "hnsw"] = "exact",
+    similarity_backend: Literal["exact", "hnsw"] | None = None,
     ann_config: AnnConfig | None = None,
+    *,
+    search_mode: SearchMode | str = SearchMode.AUTO,
 )
 ```
 
@@ -37,8 +39,11 @@ Client(
 |---|---|---|
 | `storage_backend` | `JsonStorage("remem_store.json")` | Where execution records are persisted. |
 | `policy` | `ReusePolicy()` | Similarity thresholds and metadata constraints. |
-| `similarity_backend` | `"exact"` | Use `"hnsw"` for optional HNSW ANN search; install `remem-ai[ann]` first. |
+| `similarity_backend` | `None` | Deprecated compatibility alias for `"exact"` or `"hnsw"`. Do not combine it with a non-auto `search_mode`. |
 | `ann_config` | `None` | Optional `AnnConfig` tuning for the HNSW backend. Ignored for exact search. |
+| `search_mode` | `"auto"` | `"auto"`, `"exact_cosine"`, or `"hnsw_cosine"`. Enum members from `SearchMode` are also accepted. |
+
+`auto` uses HNSW when USearch is installed and otherwise resolves to exact cosine. Resolution is observable through `client.search_mode`, `client.resolved_search_mode`, `client.search_fallback_reason`, and the combined immutable `client.search_resolution` value. No dataset-size threshold is applied.
 
 ### ANN configuration
 
@@ -48,7 +53,7 @@ Client(
 from remem import AnnConfig, Client
 
 client = Client(
-    similarity_backend="hnsw",
+    search_mode="hnsw_cosine",
     ann_config=AnnConfig(m=16, ef_construction=200, ef_search=100),
 )
 ```
