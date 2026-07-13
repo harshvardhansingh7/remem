@@ -9,7 +9,8 @@ from remem.models.execution_result import ExecutionResult
 from remem.reuse.decision import ReuseDecision, ReuseOutcome
 from remem.reuse.matcher import MetadataMatcher
 from remem.reuse.policy import ReusePolicy
-from remem.similarity.engine import SimilarityEngine
+from remem.similarity.engine import SimilarityEngine, SimilarityMatch
+from remem.similarity.index import AnnIndexStateError
 from remem.storage.storage import StorageInterface
 
 
@@ -27,6 +28,19 @@ class ReuseEngine:
         self.similarity = similarity
         self.policy = policy
         self.metrics = metrics
+        self.rebuild_index()
+
+    def rebuild_index(self) -> None:
+        """Rebuild ANN state outside the query path from authoritative storage."""
+
+        if self.similarity.backend == "hnsw":
+            self.similarity.rebuild(self.storage.all())
+
+    def store_record(self, record: ExecutionRecord) -> None:
+        """Store a record and refresh derived ANN state when configured."""
+
+        self.storage.put(record)
+        self.rebuild_index()
 
     def _find_best_compatible(
         self,
@@ -35,13 +49,44 @@ class ReuseEngine:
         threshold: float,
     ):
         """Shared metadata-filter + similarity scan used by both public methods."""
-        all_entries = self.storage.all()
-        compatible = MetadataMatcher.filter_candidates(
-            all_entries, context, self.policy
+        if self.similarity.backend == "exact":
+            all_entries = self.storage.all()
+            compatible = MetadataMatcher.filter_candidates(
+                all_entries, context, self.policy
+            )
+            return self.similarity.find_best_match(
+                query_embedding, compatible, threshold=threshold
+            )
+
+        candidate_ids = self.similarity.find_candidate_ids(query_embedding, top_k=1)
+        records = self.storage.get_many(candidate_ids)
+        resolved_ids = {record.id for record in records}
+        missing_ids = [
+            record_id for record_id in candidate_ids if record_id not in resolved_ids
+        ]
+        if missing_ids:
+            missing = ", ".join(str(record_id) for record_id in missing_ids)
+            raise AnnIndexStateError(
+                f"ANN candidates reference unavailable records: {missing}. "
+                "Reload or rebuild the client index from authoritative storage."
+            )
+
+        compatible = MetadataMatcher.filter_candidates(records, context, self.policy)
+        compatible_ids = {record.id for record in compatible}
+        ordered_ids = [
+            record_id for record_id in candidate_ids if record_id in compatible_ids
+        ]
+        matches = self.similarity.rerank_candidate_records(
+            query_embedding,
+            ordered_ids,
+            compatible,
+            threshold,
+            top_k=1,
         )
-        return self.similarity.find_best_match(
-            query_embedding, compatible, threshold=threshold
-        )
+        if not matches:
+            return None
+        entry, score = matches[0]
+        return SimilarityMatch(entry=entry, score=score)
 
     def check(
         self,
@@ -124,7 +169,7 @@ class ReuseEngine:
         if not best_match:
             self.metrics.record(MetricEvent.MISS)
             exec_result = compute_callback()
-            self.storage.put(
+            self.store_record(
                 ExecutionRecord(
                     id=uuid4(),
                     embedding=query_embedding,
@@ -165,7 +210,7 @@ class ReuseEngine:
         self.metrics.record(MetricEvent.HIT, similarity=score)
         self.metrics.record(MetricEvent.RETRIEVAL_REUSED)
         computed_exec = compute_callback()
-        self.storage.put(
+        self.store_record(
             ExecutionRecord(
                 id=uuid4(),
                 embedding=query_embedding,

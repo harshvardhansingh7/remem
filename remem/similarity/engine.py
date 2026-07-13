@@ -1,9 +1,15 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Optional
+from uuid import UUID
 
 from remem.models.execution_record import ExecutionRecord
-from remem.similarity.index import AnnConfig, ExactSimilarityIndex, HnswSimilarityIndex
+from remem.similarity.index import (
+    AnnConfig,
+    ExactSimilarityIndex,
+    HnswSimilarityIndex,
+    rerank_candidates,
+)
 
 
 @dataclass
@@ -29,6 +35,42 @@ class SimilarityEngine:
         else:
             raise ValueError("backend must be either 'exact' or 'hnsw'.")
         self.backend = backend
+
+    def rebuild(self, entries: Sequence[ExecutionRecord]) -> None:
+        """Rebuild derived ANN state; exact search has no derived state."""
+
+        if self.backend == "hnsw":
+            self._index.rebuild(entries)
+
+    def find_candidate_ids(
+        self,
+        query_embedding: Sequence[float],
+        top_k: Optional[int] = None,
+    ) -> list[UUID]:
+        """Discover ANN candidate IDs without resolving storage records."""
+
+        if self.backend != "hnsw":
+            raise RuntimeError("Candidate ID discovery is available only for HNSW.")
+        return self._index.candidate_ids(query_embedding, top_k)
+
+    @staticmethod
+    def rerank_candidate_records(
+        query_embedding: Sequence[float],
+        candidate_ids: Sequence[UUID],
+        records: Sequence[ExecutionRecord],
+        threshold: float,
+        top_k: Optional[int],
+    ) -> list[tuple[ExecutionRecord, float]]:
+        """Apply exact cosine reranking to directly resolved ANN records."""
+
+        records_by_id = {record.id: record for record in records}
+        return rerank_candidates(
+            query_embedding,
+            candidate_ids,
+            records_by_id,
+            threshold,
+            top_k,
+        )
 
     def find_best_match(
         self,

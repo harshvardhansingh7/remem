@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.1.0.dev2] - Unreleased
+## [1.1.0.dev3] - Unreleased
+
+### Added
+
+- Ordered `StorageInterface.get_many()` record lookup with a compatible default
+  for existing custom backends and optimized built-in implementations.
+
+### Changed
+
+- ANN indexes are built at client initialization and refreshed after client
+  mutations, outside the query path.
+- ANN queries resolve only returned candidate IDs instead of calling
+  `StorageInterface.all()` to locate candidate records.
+
+---
+
+## [1.1.0.dev2] - 2026-07-13
 
 ### Added
 

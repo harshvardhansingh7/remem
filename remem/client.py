@@ -119,7 +119,7 @@ class Client:
         """
         from uuid import uuid4
 
-        self.storage.put(
+        self.reuse_planner.store_record(
             ExecutionRecord(
                 id=uuid4(),
                 embedding=query_embedding,
@@ -131,7 +131,7 @@ class Client:
 
     def store(self, record: ExecutionRecord) -> None:
         """Saves a rich execution record directly."""
-        self.storage.put(record)
+        self.reuse_planner.store_record(record)
 
     def get_or_compute(
         self,
@@ -148,7 +148,10 @@ class Client:
         )
 
     def delete(self, entry_id: UUID) -> bool:
-        return self.storage.delete(entry_id)
+        deleted = self.storage.delete(entry_id)
+        if deleted:
+            self.reuse_planner.rebuild_index()
+        return deleted
 
     def all(self) -> list[ExecutionRecord]:
         return self.storage.all()
@@ -162,7 +165,9 @@ class Client:
         """Explicitly synchronizes working tables from disk files."""
         if hasattr(self.storage, "load"):
             getattr(self.storage, "load")()
+            self.reuse_planner.rebuild_index()
 
     def flush_storage(self) -> None:
         """Clears all records from persistence."""
         self.storage.flush()
+        self.reuse_planner.rebuild_index()

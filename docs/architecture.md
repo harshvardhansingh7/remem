@@ -46,7 +46,7 @@ client.check(embedding)
            (similarity < 0.80)      Store the result with client.remember()
 ```
 
-Metadata filtering always runs **before** similarity computation. Stored records are first narrowed by `ReusePolicy` constraints — namespace, knowledge-base version, prompt version, and model — so similarity is only ever computed across genuinely compatible candidates. This is what allows a knowledge-base update or a model switch to invalidate stale results automatically, with no manual cache-busting.
+Exact search filters all stored records through `ReusePolicy` before cosine calculation. ANN search first discovers a bounded set of record IDs in the global HNSW index, resolves only those records through `StorageInterface.get_many()`, rejects metadata-incompatible candidates, and then calculates exact cosine similarity. Incompatible records are never reranked or returned. Because metadata is currently applied after bounded ANN discovery, heavily partitioned datasets may require a larger `candidate_count`; filter-aware indexing remains a later roadmap item.
 
 ## Core Components
 
@@ -70,7 +70,7 @@ Possible outcomes:
 
 ### Metadata Matcher
 
-Located in `remem/reuse/matcher.py`. Applies `ReusePolicy` constraints to filter stored records before any similarity computation happens. Examples of what it checks:
+Located in `remem/reuse/matcher.py`. Applies `ReusePolicy` constraints before exact cosine scoring and reuse decisions. Examples of what it checks:
 
 - Same namespace
 - Same knowledge-base version
@@ -82,17 +82,19 @@ Located in `remem/reuse/matcher.py`. Applies `ReusePolicy` constraints to filter
 Located in `remem/similarity/engine.py`, backed by `remem/similarity/metrics.py`. Finds semantically related requests among metadata-compatible candidates.
 
 - **Current implementation:** automatic, exact cosine, and optional HNSW cosine search
-- **Planned:** ANN candidate reranking and indexed storage retrieval — see the [Roadmap](roadmap.md)
+- **Planned:** incremental mutation, index persistence, and filter-aware indexing — see the [Roadmap](roadmap.md)
 
 The default `search_mode="auto"` selects USearch HNSW when the optional ANN extra is installed and exact cosine otherwise. `search_mode="exact_cosine"` forces exhaustive deterministic search, while `search_mode="hnsw_cosine"` forces ANN and reports a clear installation error if USearch is missing. The requested mode, resolved mode, and fallback reason are exposed on `Client`; automatic fallback is therefore inspectable without changing result structures. No dataset-size threshold is used because the project does not yet have benchmark evidence for one.
 
-HNSW performs candidate discovery only. Remem resolves the candidate records, recalculates exact cosine similarity, sorts by those exact scores, and then applies reuse thresholds. This preserves the existing `[-1.0, 1.0]` thresholds and `ReuseOutcome.similarity_score` semantics without claiming exhaustive nearest-neighbor recall. `AnnConfig.candidate_count` controls the recall-versus-reranking-latency trade-off and defaults to 50. Execution records remain authoritative in storage; the in-memory ANN index rebuilds when candidates change and after restart or reload, so no separate index file can become stale.
+HNSW performs candidate discovery only. Remem resolves candidate records with an ordered batch ID lookup, recalculates exact cosine similarity, sorts by those exact scores, and then applies reuse thresholds. This preserves the existing `[-1.0, 1.0]` thresholds and `ReuseOutcome.similarity_score` semantics without claiming exhaustive nearest-neighbor recall. `AnnConfig.candidate_count` controls the recall-versus-reranking-latency trade-off and defaults to 50. Execution records remain authoritative in storage; the in-memory ANN index rebuilds at client initialization and after client-mediated mutations, outside the query path. Incremental updates and persistence remain future milestones.
 
 USearch was selected because it provides lightweight prebuilt Python wheels across common platforms while using HNSW internally. Keeping it optional leaves the base package and legacy exact behavior unchanged. Higher `AnnConfig.ef_search` improves approximate-search recall at the cost of query latency; no benchmark claim is made here.
 
 ### Storage Layer
 
 Abstracted behind `StorageInterface` (`remem/storage/storage.py`), so the reuse engine never depends on a specific persistence mechanism.
+
+`get_many(entry_ids)` returns available records in requested order. Both built-in backends use their UUID-keyed in-memory dictionaries directly, so ANN candidate resolution does not enumerate all stored records. Existing custom `StorageInterface` implementations inherit a compatibility implementation that calls their required `get()` method once per candidate; they can override `get_many()` with a native batch query such as SQL `WHERE id IN (...)`.
 
 | Implementation | File | Persistence |
 |---|---|---|

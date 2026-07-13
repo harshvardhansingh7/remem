@@ -133,7 +133,34 @@ class HnswSimilarityIndex:
         if not entries:
             return []
 
+        self.rebuild(entries)
+        candidate_ids = self.candidate_ids(query_embedding, top_k)
+        records_by_id = {record.id: record for record in self._records}
+        return rerank_candidates(
+            query_embedding,
+            candidate_ids,
+            records_by_id,
+            threshold,
+            top_k,
+        )
+
+    def rebuild(self, entries: Sequence[ExecutionRecord]) -> None:
+        """Synchronize the derived index from authoritative records."""
+
         self._synchronize(entries)
+
+    def candidate_ids(
+        self,
+        query_embedding: Sequence[float],
+        top_k: Optional[int],
+    ) -> list[UUID]:
+        """Return approximate candidate IDs without resolving stored records."""
+
+        if top_k is not None and top_k <= 0:
+            raise ValueError("top_k must be a positive integer when provided.")
+        if not self._records:
+            return []
+
         query = self._validate_vector(query_embedding, "query embedding")
         if query.size != self._dimension:
             raise ValueError(
@@ -146,7 +173,7 @@ class HnswSimilarityIndex:
             requested = max(requested, top_k)
         count = min(requested, len(self._records))
         matches = self._index.search(query, count=count)
-        candidate_ids = []
+        candidate_ids: list[UUID] = []
         for label in matches.keys:
             position = int(label)
             if position < 0 or position >= len(self._records):
@@ -156,14 +183,7 @@ class HnswSimilarityIndex:
                 )
             candidate_ids.append(self._records[position].id)
 
-        records_by_id = {record.id: record for record in self._records}
-        return rerank_candidates(
-            query_embedding,
-            candidate_ids,
-            records_by_id,
-            threshold,
-            top_k,
-        )
+        return list(dict.fromkeys(candidate_ids))
 
     def _synchronize(self, entries: Sequence[ExecutionRecord]) -> None:
         fingerprint = tuple(
@@ -171,6 +191,13 @@ class HnswSimilarityIndex:
             for entry in entries
         )
         if fingerprint == self._fingerprint:
+            return
+
+        if not entries:
+            self._index = None
+            self._records = []
+            self._fingerprint = ()
+            self._dimension = None
             return
 
         vectors = [

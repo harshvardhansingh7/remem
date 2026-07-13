@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from collections.abc import Sequence
 from typing import List, Optional
 from uuid import UUID
 
@@ -25,6 +26,13 @@ class JsonStorage(StorageInterface):
 
     def get(self, entry_id: UUID) -> Optional[ExecutionRecord]:
         return self._memory_store.get(entry_id)
+
+    def get_many(self, entry_ids: Sequence[UUID]) -> List[ExecutionRecord]:
+        return [
+            record
+            for entry_id in entry_ids
+            if (record := self._memory_store.get(entry_id)) is not None
+        ]
 
     def delete(self, entry_id: UUID) -> bool:
         if entry_id in self._memory_store:
