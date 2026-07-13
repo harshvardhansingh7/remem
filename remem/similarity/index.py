@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional
+from typing import Mapping, Optional
+from uuid import UUID
 
 import numpy as np
 
@@ -28,6 +29,7 @@ class AnnConfig:
     m: int = 16
     ef_construction: int = 200
     ef_search: int = 50
+    candidate_count: int = 50
 
     def __post_init__(self) -> None:
         if self.m <= 0:
@@ -36,6 +38,44 @@ class AnnConfig:
             raise ValueError("ef_construction must be a positive integer.")
         if self.ef_search <= 0:
             raise ValueError("ef_search must be a positive integer.")
+        if self.candidate_count <= 0:
+            raise ValueError("candidate_count must be a positive integer.")
+
+
+class AnnIndexStateError(RuntimeError):
+    """Raised when ANN candidate identifiers cannot be resolved safely."""
+
+
+def rerank_candidates(
+    query_embedding: Sequence[float],
+    candidate_ids: Sequence[UUID],
+    records_by_id: Mapping[UUID, ExecutionRecord],
+    threshold: float,
+    top_k: Optional[int],
+) -> list[tuple[ExecutionRecord, float]]:
+    """Deduplicate ANN candidates and rank them using exact cosine scores."""
+
+    unique_ids = list(dict.fromkeys(candidate_ids))
+    missing_ids = [
+        record_id for record_id in unique_ids if record_id not in records_by_id
+    ]
+    if missing_ids:
+        missing = ", ".join(str(record_id) for record_id in missing_ids)
+        raise AnnIndexStateError(
+            f"ANN candidates reference unavailable records: {missing}. "
+            "Rebuild the ANN index from authoritative storage."
+        )
+
+    matches = [
+        (
+            records_by_id[record_id],
+            cosine_similarity(query_embedding, records_by_id[record_id].embedding),
+        )
+        for record_id in unique_ids
+    ]
+    matches = [match for match in matches if match[1] >= threshold]
+    matches.sort(key=lambda item: (-item[1], str(item[0].id)))
+    return matches if top_k is None else matches[:top_k]
 
 
 class ExactSimilarityIndex:
@@ -101,14 +141,29 @@ class HnswSimilarityIndex:
                 f"dimension {self._dimension}."
             )
 
-        count = len(self._records) if top_k is None else min(top_k, len(self._records))
+        requested = self.config.candidate_count
+        if top_k is not None:
+            requested = max(requested, top_k)
+        count = min(requested, len(self._records))
         matches = self._index.search(query, count=count)
-        matches = [
-            (self._records[int(label)], float(1.0 - distance))
-            for label, distance in zip(matches.keys, matches.distances)
-            if float(1.0 - distance) >= threshold
-        ]
-        return matches
+        candidate_ids = []
+        for label in matches.keys:
+            position = int(label)
+            if position < 0 or position >= len(self._records):
+                raise AnnIndexStateError(
+                    f"ANN index returned unknown internal label {position}. "
+                    "Rebuild the ANN index from authoritative storage."
+                )
+            candidate_ids.append(self._records[position].id)
+
+        records_by_id = {record.id: record for record in self._records}
+        return rerank_candidates(
+            query_embedding,
+            candidate_ids,
+            records_by_id,
+            threshold,
+            top_k,
+        )
 
     def _synchronize(self, entries: Sequence[ExecutionRecord]) -> None:
         fingerprint = tuple(

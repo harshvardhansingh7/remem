@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.1.0.dev1] - Unreleased
+## [1.1.0.dev2] - Unreleased
+
+### Added
+
+- Configurable HNSW candidate retrieval through `AnnConfig.candidate_count`.
+- Exact cosine reranking for every ANN candidate set.
+
+### Changed
+
+- HNSW is used only for candidate discovery. Public ordering, thresholds, and
+  similarity scores now come from exact cosine calculations.
+
+---
+
+## [1.1.0.dev1] - 2026-07-12
 
 ### Added
 

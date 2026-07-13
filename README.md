@@ -8,7 +8,7 @@
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10+-blue.svg">
-  <img alt="Version" src="https://img.shields.io/badge/Version-v1.1.0.dev1-orange">
+  <img alt="Version" src="https://img.shields.io/badge/Version-v1.1.0.dev2-orange">
   <img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-green.svg">
   <img alt="PyPI" src="https://img.shields.io/badge/PyPI-remem--ai-blue">
 </p>
@@ -133,13 +133,13 @@ client = Client()  # auto
 exact_client = Client(search_mode="exact_cosine")
 hnsw_client = Client(
     search_mode="hnsw_cosine",
-    ann_config=AnnConfig(ef_search=100),
+    ann_config=AnnConfig(ef_search=100, candidate_count=50),
 )
 ```
 
 Inspect `client.resolved_search_mode` and `client.search_fallback_reason` to see what `auto` selected. Forced HNSW mode fails with an installation hint when the ANN extra is unavailable. The older `similarity_backend="exact"|"hnsw"` argument remains temporarily supported with a deprecation warning.
 
-ANN returns the same cosine-similarity score semantics as exact search (`-1.0` to `1.0`); Remem converts the index distance before applying reuse thresholds. The index is derived from stored records and rebuilt automatically after storage reloads or record updates, so no separate index file is persisted. Higher `ef_search` improves recall at the cost of query latency.
+HNSW retrieves a candidate set, then Remem recalculates exact cosine similarity for those candidates before sorting and applying reuse thresholds. Final scores therefore retain exact cosine semantics (`-1.0` to `1.0`), although ANN candidate discovery does not guarantee exact nearest-neighbor recall. Increasing `candidate_count` can improve recall at the cost of reranking latency; higher `ef_search` can improve HNSW discovery recall at the cost of search latency. The index is derived from stored records and rebuilt automatically after storage reloads or record updates, so no separate index file is persisted.
 
 ## Documentation
 

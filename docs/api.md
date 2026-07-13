@@ -54,11 +54,16 @@ from remem import AnnConfig, Client
 
 client = Client(
     search_mode="hnsw_cosine",
-    ann_config=AnnConfig(m=16, ef_construction=200, ef_search=100),
+    ann_config=AnnConfig(
+        m=16,
+        ef_construction=200,
+        ef_search=100,
+        candidate_count=50,
+    ),
 )
 ```
 
-`m` and `ef_construction` tune index construction. `ef_search` increases recall when raised, at the cost of query time. ANN preserves cosine similarity score semantics by converting the backend cosine distance (`1 - distance`) before threshold filtering. The index is in-memory and rebuilds from the configured storage backend after reload, record insertion, deletion, or update.
+`m` and `ef_construction` tune index construction. `ef_search` increases candidate-discovery recall when raised, at the cost of query time. `candidate_count` controls how many likely neighbors HNSW returns for exact cosine reranking; its default is 50. Larger candidate sets can improve recall but increase exact-reranking latency. Final ordering, score values, and threshold filtering use exact cosine. Candidate discovery remains approximate and does not guarantee the same neighbors as exhaustive search. The index is in-memory and rebuilds from the configured storage backend after reload, record insertion, deletion, or update.
 
 ### `check(query_embedding, context)`
 
