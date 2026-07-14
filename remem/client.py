@@ -148,10 +148,7 @@ class Client:
         )
 
     def delete(self, entry_id: UUID) -> bool:
-        deleted = self.storage.delete(entry_id)
-        if deleted:
-            self.reuse_planner.rebuild_index()
-        return deleted
+        return self.reuse_planner.delete_record(entry_id)
 
     def all(self) -> list[ExecutionRecord]:
         return self.storage.all()
@@ -169,5 +166,4 @@ class Client:
 
     def flush_storage(self) -> None:
         """Clears all records from persistence."""
-        self.storage.flush()
-        self.reuse_planner.rebuild_index()
+        self.reuse_planner.clear_records()

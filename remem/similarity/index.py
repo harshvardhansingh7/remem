@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from threading import RLock
 from typing import Mapping, Optional
 from uuid import UUID
 
@@ -44,6 +45,10 @@ class AnnConfig:
 
 class AnnIndexStateError(RuntimeError):
     """Raised when ANN candidate identifiers cannot be resolved safely."""
+
+
+class AnnMutationError(AnnIndexStateError):
+    """Raised when storage and ANN mutation cannot complete atomically."""
 
 
 def rerank_candidates(
@@ -118,8 +123,14 @@ class HnswSimilarityIndex:
         self.config = config or AnnConfig()
         self._index = None
         self._records: list[ExecutionRecord] = []
+        self._key_by_record_id: dict[UUID, int] = {}
+        self._record_id_by_key: dict[int, UUID] = {}
+        self._embedding_by_record_id: dict[UUID, tuple[float, ...]] = {}
+        self._next_key = 0
         self._fingerprint: tuple[tuple[str, tuple[float, ...]], ...] = ()
         self._dimension: Optional[int] = None
+        self._lock = RLock()
+        self.rebuild_count = 0
 
     def search(
         self,
@@ -147,7 +158,82 @@ class HnswSimilarityIndex:
     def rebuild(self, entries: Sequence[ExecutionRecord]) -> None:
         """Synchronize the derived index from authoritative records."""
 
-        self._synchronize(entries)
+        with self._lock:
+            self._synchronize(entries)
+
+    def upsert(self, record: ExecutionRecord) -> str:
+        """Insert or replace one record without rebuilding the full graph."""
+
+        vector = self._validate_vector(record.embedding, f"embedding for {record.id}")
+        embedding = tuple(float(value) for value in record.embedding)
+        with self._lock:
+            if self._dimension is not None and vector.size != self._dimension:
+                raise ValueError(
+                    f"Embedding dimension {vector.size} does not match index "
+                    f"dimension {self._dimension}."
+                )
+            existing_key = self._key_by_record_id.get(record.id)
+            if existing_key is not None:
+                if self._embedding_by_record_id[record.id] == embedding:
+                    self._replace_cached_record(record)
+                    return "unchanged"
+                self._index.remove(existing_key, compact=True)
+                self._index.add(existing_key, vector)
+                self._embedding_by_record_id[record.id] = embedding
+                self._replace_cached_record(record)
+                self._refresh_fingerprint()
+                return "updated"
+
+            if self._index is None:
+                self._dimension = int(vector.size)
+                self._index = self._create_index(self._dimension)
+            key = self._next_key
+            self._next_key += 1
+            self._index.add(key, vector)
+            self._key_by_record_id[record.id] = key
+            self._record_id_by_key[key] = record.id
+            self._embedding_by_record_id[record.id] = embedding
+            self._records.append(record)
+            self._refresh_fingerprint()
+            return "inserted"
+
+    def delete(self, record_id: UUID) -> bool:
+        """Remove one record and compact native graph state."""
+
+        with self._lock:
+            key = self._key_by_record_id.get(record_id)
+            if key is None:
+                return False
+            removed = bool(self._index.remove(key, compact=True))
+            if not removed:
+                raise AnnIndexStateError(
+                    f"ANN index could not remove key {key} for record {record_id}."
+                )
+            del self._key_by_record_id[record_id]
+            del self._record_id_by_key[key]
+            del self._embedding_by_record_id[record_id]
+            self._records = [
+                record for record in self._records if record.id != record_id
+            ]
+            self._refresh_fingerprint()
+            if not self._records:
+                self.clear()
+            return True
+
+    def clear(self) -> None:
+        """Reset native index data, mappings, and consistency state."""
+
+        with self._lock:
+            if self._index is not None:
+                self._index.reset()
+            self._index = None
+            self._records = []
+            self._key_by_record_id = {}
+            self._record_id_by_key = {}
+            self._embedding_by_record_id = {}
+            self._next_key = 0
+            self._fingerprint = ()
+            self._dimension = None
 
     def candidate_ids(
         self,
@@ -156,34 +242,36 @@ class HnswSimilarityIndex:
     ) -> list[UUID]:
         """Return approximate candidate IDs without resolving stored records."""
 
-        if top_k is not None and top_k <= 0:
-            raise ValueError("top_k must be a positive integer when provided.")
-        if not self._records:
-            return []
+        with self._lock:
+            if top_k is not None and top_k <= 0:
+                raise ValueError("top_k must be a positive integer when provided.")
+            if not self._records:
+                return []
 
-        query = self._validate_vector(query_embedding, "query embedding")
-        if query.size != self._dimension:
-            raise ValueError(
-                f"Query embedding dimension {query.size} does not match index "
-                f"dimension {self._dimension}."
-            )
-
-        requested = self.config.candidate_count
-        if top_k is not None:
-            requested = max(requested, top_k)
-        count = min(requested, len(self._records))
-        matches = self._index.search(query, count=count)
-        candidate_ids: list[UUID] = []
-        for label in matches.keys:
-            position = int(label)
-            if position < 0 or position >= len(self._records):
-                raise AnnIndexStateError(
-                    f"ANN index returned unknown internal label {position}. "
-                    "Rebuild the ANN index from authoritative storage."
+            query = self._validate_vector(query_embedding, "query embedding")
+            if query.size != self._dimension:
+                raise ValueError(
+                    f"Query embedding dimension {query.size} does not match index "
+                    f"dimension {self._dimension}."
                 )
-            candidate_ids.append(self._records[position].id)
 
-        return list(dict.fromkeys(candidate_ids))
+            requested = self.config.candidate_count
+            if top_k is not None:
+                requested = max(requested, top_k)
+            count = min(requested, len(self._records))
+            matches = self._index.search(query, count=count)
+            candidate_ids: list[UUID] = []
+            for label in matches.keys:
+                key = int(label)
+                record_id = self._record_id_by_key.get(key)
+                if record_id is None:
+                    raise AnnIndexStateError(
+                        f"ANN index returned unknown internal label {key}. "
+                        "Rebuild the ANN index from authoritative storage."
+                    )
+                candidate_ids.append(record_id)
+
+            return list(dict.fromkeys(candidate_ids))
 
     def _synchronize(self, entries: Sequence[ExecutionRecord]) -> None:
         fingerprint = tuple(
@@ -194,10 +282,7 @@ class HnswSimilarityIndex:
             return
 
         if not entries:
-            self._index = None
-            self._records = []
-            self._fingerprint = ()
-            self._dimension = None
+            self.clear()
             return
 
         vectors = [
@@ -210,7 +295,30 @@ class HnswSimilarityIndex:
         if len({entry.id for entry in entries}) != len(entries):
             raise ValueError("ANN index entries must have unique record IDs.")
 
-        index = self._index_type(
+        index = self._create_index(dimension)
+        key_by_record_id = {}
+        record_id_by_key = {}
+        embedding_by_record_id = {}
+        for key, (record, vector) in enumerate(zip(entries, vectors)):
+            index.add(key, vector)
+            key_by_record_id[record.id] = key
+            record_id_by_key[key] = record.id
+            embedding_by_record_id[record.id] = tuple(
+                float(value) for value in record.embedding
+            )
+
+        self._index = index
+        self._records = list(entries)
+        self._key_by_record_id = key_by_record_id
+        self._record_id_by_key = record_id_by_key
+        self._embedding_by_record_id = embedding_by_record_id
+        self._next_key = len(entries)
+        self._fingerprint = fingerprint
+        self._dimension = dimension
+        self.rebuild_count += 1
+
+    def _create_index(self, dimension: int):
+        return self._index_type(
             ndim=dimension,
             metric="cos",
             dtype="f32",
@@ -218,13 +326,17 @@ class HnswSimilarityIndex:
             expansion_add=self.config.ef_construction,
             expansion_search=self.config.ef_search,
         )
-        for label, vector in enumerate(vectors):
-            index.add(label, vector)
 
-        self._index = index
-        self._records = list(entries)
-        self._fingerprint = fingerprint
-        self._dimension = dimension
+    def _replace_cached_record(self, record: ExecutionRecord) -> None:
+        self._records = [
+            record if cached.id == record.id else cached for cached in self._records
+        ]
+
+    def _refresh_fingerprint(self) -> None:
+        self._fingerprint = tuple(
+            (str(record.id), self._embedding_by_record_id[record.id])
+            for record in self._records
+        )
 
     @staticmethod
     def _validate_vector(vector: Sequence[float], name: str) -> np.ndarray:
