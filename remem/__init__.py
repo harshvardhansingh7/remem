@@ -31,7 +31,7 @@ from remem.storage.json_storage import JsonStorage
 from remem.storage.memory_storage import InMemoryStorage
 from remem.storage.storage import StorageInterface
 
-__version__ = "1.1.0.dev3"
+__version__ = "1.1.0.dev4"
 
 __all__ = [
     # Core facade

@@ -40,7 +40,8 @@ This roadmap outlines the long-term vision for Remem. The project is developed i
 - User-oriented automatic and exact/HNSW search modes (`1.1.0.dev1`, completed)
 - Exact cosine reranking of ANN candidates (`1.1.0.dev2`, completed)
 - Record-ID lookup without query-time full storage scans (`1.1.0.dev3`, completed)
-- Incremental and persistent ANN indexes with consistency recovery
+- Incremental ANN mutation with consistency recovery (`1.1.0.dev4`, completed)
+- Persistent ANN indexes with validated fast reload
 - Namespace-aware filtering; arbitrary metadata indexing requires further design
 - Faster retrieval and memory optimizations
 

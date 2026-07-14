@@ -42,6 +42,26 @@ class SimilarityEngine:
         if self.backend == "hnsw":
             self._index.rebuild(entries)
 
+    def upsert(self, record: ExecutionRecord) -> str:
+        """Incrementally insert or replace one ANN record."""
+
+        if self.backend != "hnsw":
+            return "unchanged"
+        return self._index.upsert(record)
+
+    def delete(self, record_id: UUID) -> bool:
+        """Incrementally remove one ANN record."""
+
+        if self.backend != "hnsw":
+            return False
+        return self._index.delete(record_id)
+
+    def clear(self) -> None:
+        """Clear all derived ANN state."""
+
+        if self.backend == "hnsw":
+            self._index.clear()
+
     def find_candidate_ids(
         self,
         query_embedding: Sequence[float],

@@ -63,7 +63,9 @@ client = Client(
 )
 ```
 
-`m` and `ef_construction` tune index construction. `ef_search` increases candidate-discovery recall when raised, at the cost of query time. `candidate_count` controls how many likely neighbors HNSW returns for exact cosine reranking; its default is 50. Larger candidate sets can improve recall but increase exact-reranking latency. Final ordering, score values, and threshold filtering use exact cosine. Candidate discovery remains approximate and does not guarantee the same neighbors as exhaustive search. The index is in-memory and rebuilds from the configured storage backend after reload, record insertion, deletion, or update.
+`m` and `ef_construction` tune index construction. `ef_search` increases candidate-discovery recall when raised, at the cost of query time. `candidate_count` controls how many likely neighbors HNSW returns for exact cosine reranking; its default is 50. Larger candidate sets can improve recall but increase exact-reranking latency. Final ordering, score values, and threshold filtering use exact cosine. Candidate discovery remains approximate and does not guarantee the same neighbors as exhaustive search. The index is in-memory and is initially derived from the configured storage backend.
+
+Client-mediated record mutations synchronize HNSW incrementally. Inserts allocate stable internal keys; embedding replacements remove and reinsert the native vector under the same key; deletes compact native graph state; and response, reference, or context-only changes avoid graph mutation. Storage commits first. An ANN failure rolls storage back and rebuilds the derived graph, raising `AnnMutationError` so callers can observe the failed operation. Full rebuilds remain for startup, explicit reload, and recovery. Operations through one `Client` are lifecycle-locked; direct storage mutation and multi-process writers are outside the supported consistency boundary.
 
 ### `check(query_embedding, context)`
 

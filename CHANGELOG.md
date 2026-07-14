@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.1.0.dev3] - Unreleased
+## [1.1.0.dev4] - Unreleased
+
+### Added
+
+- Incremental HNSW insertion, embedding replacement, and native deletion using
+  stable internal integer keys.
+- Storage rollback and deterministic index recovery when ANN mutation fails.
+- Client-level lifecycle locking for concurrent ANN queries and mutations.
+
+### Changed
+
+- Non-vector record updates refresh cached record state without mutating HNSW.
+- Full ANN rebuilds are now limited to startup, explicit reload, and recovery.
+
+---
+
+## [1.1.0.dev3] - 2026-07-14
 
 ### Added
 

@@ -1,5 +1,6 @@
+from threading import RLock
 from typing import Callable
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from remem.metrics.collector import MetricsCollector
 from remem.metrics.events import MetricEvent
@@ -10,7 +11,7 @@ from remem.reuse.decision import ReuseDecision, ReuseOutcome
 from remem.reuse.matcher import MetadataMatcher
 from remem.reuse.policy import ReusePolicy
 from remem.similarity.engine import SimilarityEngine, SimilarityMatch
-from remem.similarity.index import AnnIndexStateError
+from remem.similarity.index import AnnIndexStateError, AnnMutationError
 from remem.storage.storage import StorageInterface
 
 
@@ -28,19 +29,89 @@ class ReuseEngine:
         self.similarity = similarity
         self.policy = policy
         self.metrics = metrics
+        self._lifecycle_lock = RLock()
         self.rebuild_index()
 
     def rebuild_index(self) -> None:
         """Rebuild ANN state outside the query path from authoritative storage."""
 
-        if self.similarity.backend == "hnsw":
-            self.similarity.rebuild(self.storage.all())
+        with self._lifecycle_lock:
+            if self.similarity.backend == "hnsw":
+                self.similarity.rebuild(self.storage.all())
 
     def store_record(self, record: ExecutionRecord) -> None:
         """Store a record and refresh derived ANN state when configured."""
 
-        self.storage.put(record)
-        self.rebuild_index()
+        with self._lifecycle_lock:
+            previous = self.storage.get(record.id)
+            self.storage.put(record)
+            if self.similarity.backend != "hnsw":
+                return
+            try:
+                self.similarity.upsert(record)
+            except Exception as mutation_error:
+                try:
+                    if previous is None:
+                        self.storage.delete(record.id)
+                    else:
+                        self.storage.put(previous)
+                    self.similarity.rebuild(self.storage.all())
+                except Exception as recovery_error:
+                    raise AnnMutationError(
+                        "ANN upsert failed and rollback recovery also failed."
+                    ) from recovery_error
+                raise AnnMutationError(
+                    "ANN upsert failed; the storage write was rolled back and "
+                    "the index was rebuilt."
+                ) from mutation_error
+
+    def delete_record(self, record_id: UUID) -> bool:
+        """Delete storage and ANN state together with rollback recovery."""
+
+        with self._lifecycle_lock:
+            previous = self.storage.get(record_id)
+            if previous is None or not self.storage.delete(record_id):
+                return False
+            if self.similarity.backend != "hnsw":
+                return True
+            try:
+                self.similarity.delete(record_id)
+            except Exception as mutation_error:
+                try:
+                    self.storage.put(previous)
+                    self.similarity.rebuild(self.storage.all())
+                except Exception as recovery_error:
+                    raise AnnMutationError(
+                        "ANN delete failed and rollback recovery also failed."
+                    ) from recovery_error
+                raise AnnMutationError(
+                    "ANN delete failed; the storage deletion was rolled back and "
+                    "the index was rebuilt."
+                ) from mutation_error
+            return True
+
+    def clear_records(self) -> None:
+        """Clear storage and derived ANN state with rollback recovery."""
+
+        with self._lifecycle_lock:
+            previous = self.storage.all()
+            self.storage.flush()
+            if self.similarity.backend != "hnsw":
+                return
+            try:
+                self.similarity.clear()
+            except Exception as mutation_error:
+                try:
+                    for record in previous:
+                        self.storage.put(record)
+                    self.similarity.rebuild(previous)
+                except Exception as recovery_error:
+                    raise AnnMutationError(
+                        "ANN clear failed and rollback recovery also failed."
+                    ) from recovery_error
+                raise AnnMutationError(
+                    "ANN clear failed; storage was restored and the index rebuilt."
+                ) from mutation_error
 
     def _find_best_compatible(
         self,
@@ -49,44 +120,49 @@ class ReuseEngine:
         threshold: float,
     ):
         """Shared metadata-filter + similarity scan used by both public methods."""
-        if self.similarity.backend == "exact":
-            all_entries = self.storage.all()
+        with self._lifecycle_lock:
+            if self.similarity.backend == "exact":
+                all_entries = self.storage.all()
+                compatible = MetadataMatcher.filter_candidates(
+                    all_entries, context, self.policy
+                )
+                return self.similarity.find_best_match(
+                    query_embedding, compatible, threshold=threshold
+                )
+
+            candidate_ids = self.similarity.find_candidate_ids(query_embedding, top_k=1)
+            records = self.storage.get_many(candidate_ids)
+            resolved_ids = {record.id for record in records}
+            missing_ids = [
+                record_id
+                for record_id in candidate_ids
+                if record_id not in resolved_ids
+            ]
+            if missing_ids:
+                missing = ", ".join(str(record_id) for record_id in missing_ids)
+                raise AnnIndexStateError(
+                    f"ANN candidates reference unavailable records: {missing}. "
+                    "Reload or rebuild the client index from authoritative storage."
+                )
+
             compatible = MetadataMatcher.filter_candidates(
-                all_entries, context, self.policy
+                records, context, self.policy
             )
-            return self.similarity.find_best_match(
-                query_embedding, compatible, threshold=threshold
+            compatible_ids = {record.id for record in compatible}
+            ordered_ids = [
+                record_id for record_id in candidate_ids if record_id in compatible_ids
+            ]
+            matches = self.similarity.rerank_candidate_records(
+                query_embedding,
+                ordered_ids,
+                compatible,
+                threshold,
+                top_k=1,
             )
-
-        candidate_ids = self.similarity.find_candidate_ids(query_embedding, top_k=1)
-        records = self.storage.get_many(candidate_ids)
-        resolved_ids = {record.id for record in records}
-        missing_ids = [
-            record_id for record_id in candidate_ids if record_id not in resolved_ids
-        ]
-        if missing_ids:
-            missing = ", ".join(str(record_id) for record_id in missing_ids)
-            raise AnnIndexStateError(
-                f"ANN candidates reference unavailable records: {missing}. "
-                "Reload or rebuild the client index from authoritative storage."
-            )
-
-        compatible = MetadataMatcher.filter_candidates(records, context, self.policy)
-        compatible_ids = {record.id for record in compatible}
-        ordered_ids = [
-            record_id for record_id in candidate_ids if record_id in compatible_ids
-        ]
-        matches = self.similarity.rerank_candidate_records(
-            query_embedding,
-            ordered_ids,
-            compatible,
-            threshold,
-            top_k=1,
-        )
-        if not matches:
-            return None
-        entry, score = matches[0]
-        return SimilarityMatch(entry=entry, score=score)
+            if not matches:
+                return None
+            entry, score = matches[0]
+            return SimilarityMatch(entry=entry, score=score)
 
     def check(
         self,
