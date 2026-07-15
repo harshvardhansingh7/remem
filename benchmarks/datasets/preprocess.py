@@ -10,8 +10,6 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
-import pandas as pd
-
 from benchmarks.io import write_json
 from benchmarks.model import (
     BenchmarkCase,
@@ -128,6 +126,8 @@ def preprocess_banking77(
 def _paws_rows(raw_dir: Path, split: str) -> list[dict[str, Any]]:
     parquet_path = raw_dir / f"{split}.parquet"
     if parquet_path.exists():
+        import pandas as pd
+
         return pd.read_parquet(parquet_path).to_dict(orient="records")
     candidates = list((raw_dir / "extracted").rglob(f"{split}.tsv"))
     if not candidates:
