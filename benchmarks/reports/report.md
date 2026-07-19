@@ -186,13 +186,13 @@ experiment setting, not a runtime default.
 | Dataset | Policy | Response / retrieval / miss | Response precision | Response unsafe | Overall precision / recall | p50 / p95 ms |
 |---|---|---:|---:|---:|---:|---:|
 | Banking77 | similarity only | 2 / 11 / 1,573 | 50.00% | 50.00% | 92.31% / 0.76% | 2.06 / 2.20 |
-| Banking77 | multi-signal | 2 / 11 / 1,573 | 50.00% | 50.00% | 92.31% / 0.76% | 2.11 / 2.43 |
+| Banking77 | multi-signal | 2 / 11 / 1,573 | 50.00% | 50.00% | 92.31% / 0.76% | 2.08 / 2.14 |
 | PAWS | similarity only | 878 / 0 / 122 | 29.95% | 70.05% | 29.95% / 88.55% | 28.99 / 30.36 |
-| PAWS | multi-signal | 303 / 575 / 122 | 43.56% | 56.44% | 29.95% / 88.55% | 29.27 / 30.30 |
+| PAWS | multi-signal | 303 / 575 / 122 | 43.56% | 56.44% | 29.95% / 88.55% | 29.33 / 29.99 |
 | SQuAD | similarity only | 2 / 7 / 991 | 100% | 0% | 100% / 0.90% | 29.59 / 31.07 |
-| SQuAD | multi-signal | 1 / 8 / 991 | 100% | 0% | 100% / 0.90% | 31.57 / 33.55 |
+| SQuAD | multi-signal | 1 / 8 / 991 | 100% | 0% | 100% / 0.90% | 30.10 / 30.54 |
 | SciFact | similarity only | 15 / 14 / 32 | 6.67% | 93.33% | 41.38% / 30.00% | 1.21 / 1.24 |
-| SciFact | multi-signal | 11 / 18 / 32 | 9.09% | 90.91% | 55.17% / 36.36% | 1.74 / 2.04 |
+| SciFact | multi-signal | 10 / 19 / 32 | 10.00% | 90.00% | 58.62% / 37.78% | 1.28 / 1.62 |
 
 On PAWS, the margin reduced unsafe response reuse by 13.61 percentage points
 and retained 140 of 191 validation-safe response hits at the selected setting.
@@ -206,7 +206,7 @@ response pairs “Why doesn't my disposable virtual card work?” with “Why is
 my disposable virtual card working?”, an apparent benchmark-proxy false
 positive rather than a clear semantic error. SQuAD retained all nine useful
 hits and shifted one from response to retrieval. SciFact improved overall
-precision by moving four response predictions into retrieval, but response
+precision by moving five response predictions into retrieval, but response
 reuse remained unsafe because shared scientific evidence does not imply that
 different claims have interchangeable answers.
 
@@ -217,9 +217,9 @@ while only a controlled exact duplicate permits response reuse. The archive
 MD5 is `5f7d1de60b170fc8027bb7898e2efca1` and its recorded SHA-256 is
 `536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165`.
 
-A direct policy microbenchmark measured 2.013 microseconds per threshold-only
-decision with all text checks disabled and 122.951 microseconds with the full
-multi-signal path, an added 120.938 microseconds. Public end-to-end exact-search
+A direct policy microbenchmark measured 2.321 microseconds per threshold-only
+decision with all text checks disabled and 174.686 microseconds with the full
+multi-signal path, an added 172.365 microseconds. Public end-to-end exact-search
 timings above include storage and scoring noise and should not be interpreted
 as an isolated policy cost.
 

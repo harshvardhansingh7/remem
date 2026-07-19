@@ -80,6 +80,11 @@ def test_safe_paraphrase_can_reuse_response() -> None:
             "negation",
         ),
         (
+            "Hyperfibrinogenemia increases thrombosis rates.",
+            "Hyperfibrinogenemia decreases thrombosis rates.",
+            "negation",
+        ),
+        (
             "Return the result as JSON.",
             "Return the result as a Markdown table.",
             "output_format",

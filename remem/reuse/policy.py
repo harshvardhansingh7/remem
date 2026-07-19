@@ -155,9 +155,18 @@ def _temporal_values(context: ExecutionContext, text: str) -> set[str]:
 def _polarity(text: str) -> dict[str, str]:
     normalized = _normalize(text)
     dimensions = {
-        "enabled": (r"\benable\b|\bactivate\b", r"\bdisable\b|\bdeactivate\b"),
-        "included": (r"\binclude\b|\bwith\b", r"\bexclude\b|\bwithout\b"),
-        "change": (r"\bincrease\b|\braise\b", r"\bdecrease\b|\blower\b"),
+        "enabled": (
+            r"\benabl(?:e|es|ed|ing)\b|\bactivat(?:e|es|ed|ing)\b",
+            r"\bdisabl(?:e|es|ed|ing)\b|\bdeactivat(?:e|es|ed|ing)\b",
+        ),
+        "included": (
+            r"\binclud(?:e|es|ed|ing)\b|\bwith\b",
+            r"\bexclud(?:e|es|ed|ing)\b|\bwithout\b",
+        ),
+        "change": (
+            r"\bincreas(?:e|es|ed|ing)\b|\brais(?:e|es|ed|ing)\b",
+            r"\bdecreas(?:e|es|ed|ing)\b|\blower(?:s|ed|ing)?\b",
+        ),
         "ordering": (r"\bafter\b", r"\bbefore\b"),
         "comparison": (
             r"\bgreater than\b|\bmore than\b",
