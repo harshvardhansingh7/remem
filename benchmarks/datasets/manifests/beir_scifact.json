@@ -1,0 +1,15 @@
+{
+  "citation": "Thakur et al., BEIR (NeurIPS 2021); Wadden et al., SciFact (EMNLP 2020)",
+  "files": [
+    {
+      "name": "scifact.zip",
+      "sha256": "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165",
+      "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip"
+    }
+  ],
+  "homepage": "https://github.com/beir-cellar/beir",
+  "license": "CC BY-NC 2.0 (underlying SciFact dataset)",
+  "name": "beir_scifact",
+  "purpose": "Bounded scientific retrieval-reuse evaluation using shared qrel evidence",
+  "version": "BEIR SciFact snapshot, official archive MD5 5f7d1de60b170fc8027bb7898e2efca1"
+}

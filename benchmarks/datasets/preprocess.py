@@ -6,9 +6,11 @@ import hashlib
 import json
 import tarfile
 from collections import defaultdict
+from io import TextIOWrapper
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
+from zipfile import ZipFile
 
 from benchmarks.io import write_json
 from benchmarks.model import (
@@ -285,6 +287,102 @@ def preprocess_squad(
     )
 
 
+def preprocess_beir_scifact(
+    raw_dir: Path, split: str, limit: int | None, seed: int
+) -> Workload:
+    source_split = "train" if split == "validation" else "test"
+    archive_path = raw_dir / "scifact.zip"
+    with ZipFile(archive_path) as archive:
+        with archive.open("scifact/queries.jsonl") as raw_queries:
+            queries = {
+                str(row["_id"]): str(row["text"])
+                for row in (
+                    json.loads(line)
+                    for line in TextIOWrapper(raw_queries, encoding="utf-8")
+                )
+            }
+        with archive.open(f"scifact/qrels/{source_split}.tsv") as raw_qrels:
+            qrels = list(
+                csv.DictReader(
+                    TextIOWrapper(raw_qrels, encoding="utf-8"), delimiter="\t"
+                )
+            )
+
+    queries_by_document: dict[str, set[str]] = defaultdict(set)
+    for row in qrels:
+        if int(row["score"]) > 0:
+            queries_by_document[row["corpus-id"]].add(row["query-id"])
+
+    seeds: list[SeedRecord] = []
+    cases: list[BenchmarkCase] = []
+    for document_id, query_ids in sorted(queries_by_document.items()):
+        ordered_queries = sorted(query_ids, key=lambda value: (int(value), value))
+        if len(ordered_queries) < 2:
+            continue
+        anchor_id = ordered_queries[0]
+        anchor_text = queries[anchor_id]
+        retrieval_group = f"beir-scifact:document:{document_id}"
+        record_id = _stable_id(f"beir-scifact/{source_split}/{document_id}/{anchor_id}")
+        seeds.append(
+            SeedRecord(
+                id=record_id,
+                text=anchor_text,
+                response=f"Evidence-backed result for SciFact claim {anchor_id}",
+                references=[retrieval_group],
+                response_group=f"beir-scifact:seed:{record_id}",
+                retrieval_group=retrieval_group,
+            )
+        )
+        for query_id in ordered_queries[1:]:
+            cases.append(
+                BenchmarkCase(
+                    id=f"beir-scifact:{source_split}:{document_id}:{query_id}",
+                    dataset="beir_scifact",
+                    split=split,
+                    query=queries[query_id],
+                    expected=ExpectedDecision.RETRIEVAL_REUSE,
+                    response_group=None,
+                    retrieval_group=retrieval_group,
+                    tags=["scientific-claim", "shared-evidence", "retrieval-only"],
+                )
+            )
+            if limit is not None and len(cases) >= limit:
+                break
+        if limit is not None and len(cases) >= limit:
+            break
+
+    if not seeds:
+        raise ValueError(f"SciFact {source_split} has no shared-evidence query groups")
+    duplicate_seed = seeds[0]
+    cases.append(
+        BenchmarkCase(
+            id=f"{duplicate_seed.id}:exact-duplicate",
+            dataset="beir_scifact",
+            split=split,
+            query=duplicate_seed.text,
+            expected=ExpectedDecision.RESPONSE_REUSE,
+            response_group=duplicate_seed.response_group,
+            retrieval_group=duplicate_seed.retrieval_group,
+            tags=["exact-duplicate"],
+        )
+    )
+    cases.extend(_isolation_cases(duplicate_seed, "beir_scifact", split))
+    return Workload(
+        name=f"beir-scifact-{split}",
+        dataset="beir_scifact",
+        dataset_version="BEIR SciFact official archive MD5 5f7d1de60b170fc8027bb7898e2efca1",
+        license="CC BY-NC 2.0",
+        seed=seed,
+        seeds=seeds,
+        cases=cases,
+        notes=[
+            "Queries sharing a positive qrel document are labeled retrieval-reusable only.",
+            "Shared evidence does not imply response equivalence or identical claim veracity.",
+            "Only documents associated with at least two queries form reuse pairs.",
+        ],
+    )
+
+
 def preprocess_dataset(
     dataset: str,
     data_dir: str | Path,
@@ -295,6 +393,7 @@ def preprocess_dataset(
     raw_dir = Path(data_dir) / "raw" / dataset
     builders = {
         "banking77": preprocess_banking77,
+        "beir_scifact": preprocess_beir_scifact,
         "paws_wiki": preprocess_paws,
         "squad_v1": preprocess_squad,
     }
@@ -306,7 +405,9 @@ def preprocess_dataset(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create deterministic Remem workloads")
-    parser.add_argument("dataset", choices=["banking77", "paws_wiki", "squad_v1"])
+    parser.add_argument(
+        "dataset", choices=["banking77", "beir_scifact", "paws_wiki", "squad_v1"]
+    )
     parser.add_argument("--data-dir", default="benchmarks/data")
     parser.add_argument("--split", choices=["validation", "test"], default="validation")
     parser.add_argument("--limit", type=int)

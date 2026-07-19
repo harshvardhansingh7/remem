@@ -1,0 +1,9 @@
+{
+  "ann": {"candidate_count": 50, "ef_search": 50},
+  "cost_assumptions": {"input_tokens_per_call": 1000, "model_cost_per_call": 0.01, "output_tokens_per_call": 300, "retrieval_cost_per_call": 0.001},
+  "embedding": {"batch_size": 64, "model": "sentence-transformers/all-MiniLM-L6-v2", "provider": "sentence_transformers", "revision": "c9745ed1d9f207416be6d2e6f8de32d1f16199bf"},
+  "name": "beir-scifact-test-multi-signal-exact", "output_dir": "benchmarks/results", "repeats": 3, "retrieval_k": 10, "search_mode": "exact_cosine",
+  "policy": {"minimum_response_score_margin": 0.10},
+  "sweep": {"response": [0.95], "retrieval": [0.80]}, "thresholds": {"response": 0.95, "retrieval": 0.80}, "warmup": 1,
+  "workload": "benchmarks/data/processed/beir_scifact-test.json"
+}

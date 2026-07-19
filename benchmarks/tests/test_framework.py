@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
+from zipfile import ZipFile
 
 from benchmarks.baselines import exact_key, no_reuse, normalize_key
-from benchmarks.datasets.preprocess import preprocess_banking77
+from benchmarks.datasets.preprocess import preprocess_banking77, preprocess_beir_scifact
 from benchmarks.embeddings import HashEmbeddingProvider
 from benchmarks.io import load_workload, read_json, write_json
 from benchmarks.metrics.quality import percentile, retrieval_ranking_metrics, summarize
@@ -108,6 +110,37 @@ def test_banking_preprocessing_is_deterministic(tmp_path: Path) -> None:
         "banking77:intent:passcode",
         "banking77:intent:refund",
     }
+
+
+def test_scifact_preprocessing_uses_shared_evidence_for_retrieval_only(
+    tmp_path: Path,
+) -> None:
+    queries = [
+        {"_id": "1", "text": "Claim one", "metadata": {}},
+        {"_id": "2", "text": "Claim two", "metadata": {}},
+        {"_id": "3", "text": "Unpaired claim", "metadata": {}},
+    ]
+    with ZipFile(tmp_path / "scifact.zip", "w") as archive:
+        archive.writestr(
+            "scifact/queries.jsonl",
+            "".join(json.dumps(row) + "\n" for row in queries),
+        )
+        archive.writestr(
+            "scifact/qrels/test.tsv",
+            "query-id\tcorpus-id\tscore\n1\tdoc-a\t1\n2\tdoc-a\t1\n3\tdoc-b\t1\n",
+        )
+        archive.writestr(
+            "scifact/qrels/train.tsv",
+            "query-id\tcorpus-id\tscore\n1\tdoc-a\t1\n2\tdoc-a\t1\n",
+        )
+
+    workload = preprocess_beir_scifact(tmp_path, "test", None, 17)
+
+    assert len(workload.seeds) == 1
+    assert workload.cases[0].expected.value == "retrieval_reuse"
+    assert workload.cases[0].retrieval_group == workload.seeds[0].retrieval_group
+    assert workload.cases[0].response_group is None
+    assert len([case for case in workload.cases if "isolation" in case.tags]) == 4
 
 
 def test_json_serialization_is_atomic_and_round_trips(tmp_path: Path) -> None:

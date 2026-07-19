@@ -37,12 +37,13 @@ from remem.reuse.matcher import MetadataMatcher
 from remem.similarity.engine import SimilarityEngine
 
 
-def _context(spec: Any) -> ExecutionContext:
+def _context(spec: Any, query: str | None = None) -> ExecutionContext:
     return ExecutionContext(
         namespace=spec.namespace,
         kb_version=spec.kb_version,
         prompt_version=spec.prompt_version,
         model=spec.model,
+        metadata={"query": query} if query is not None else {},
     )
 
 
@@ -84,7 +85,7 @@ def _observe(
 ) -> list[DecisionObservation]:
     observations = []
     for case in cases:
-        context = _context(case.context)
+        context = _context(case.context, case.query)
         for _ in range(warmup):
             client.check(vectors[case.id], context=context)
         outcomes = []
@@ -196,10 +197,17 @@ def _retrieval_diagnostics(
     ranked_groups: list[list[str]] = []
     relevant_groups: list[str | None] = []
     for case in cases:
-        context = _context(case.context)
+        context = _context(case.context, case.query)
         compatible = MetadataMatcher.filter_candidates(
             storage.all(), context, client.policy
         )
+        compatible = [
+            record
+            for record in compatible
+            if client.policy.retrieval_freshness_check(context, record.created_at)[
+                "passed"
+            ]
+        ]
         exact_matches = exact_engine.find_all_matches(
             vectors[case.id], compatible, threshold=-1.0, top_k=k
         )
@@ -212,7 +220,12 @@ def _retrieval_diagnostics(
             def compatible_record(
                 record: ExecutionRecord, current: ExecutionContext = context
             ) -> bool:
-                return client.policy.is_compatible(current, record.context)
+                return (
+                    client.policy.is_compatible(current, record.context)
+                    and client.policy.retrieval_freshness_check(
+                        current, record.created_at
+                    )["passed"]
+                )
 
             candidate_ids = client.similarity.find_candidate_ids(
                 vectors[case.id],
@@ -352,7 +365,7 @@ def run_benchmark(config_path: str | Path) -> Path:
                 embedding=vectors[seed_record.id],
                 response=seed_record.response,
                 references=seed_record.references,
-                context=_context(seed_record.context),
+                context=_context(seed_record.context, seed_record.text),
             )
         )
     ann_raw = config.get("ann", {})
@@ -365,9 +378,11 @@ def run_benchmark(config_path: str | Path) -> Path:
         persistence_path=persistence_path,
     )
     policy_config = config.get("thresholds", {})
+    policy_options = dict(config.get("policy", {}))
     policy = ReusePolicy(
         retrieval_threshold=float(policy_config.get("retrieval", 0.80)),
         response_threshold=float(policy_config.get("response", 0.95)),
+        **policy_options,
     )
     rss_before = memory_rss_bytes()
     build_started = time.perf_counter_ns()
