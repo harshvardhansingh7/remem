@@ -15,6 +15,13 @@ HNSW candidate retrieval when available, install the optional ANN extra:
 pip install "remem-ai[ann]"
 ```
 
+To share one semantic cache across application instances, install the optional
+Redis extra:
+
+```bash
+pip install "remem-ai[redis]"
+```
+
 To also run the bundled examples and tests, clone the repository instead:
 
 ```bash
@@ -23,7 +30,8 @@ cd remem
 pip install -e ".[dev]"
 ```
 
-**Requirements:** Python 3.10+. No other services, API keys, or environment variables are needed.
+**Requirements:** Python 3.10+. Local mode needs no service, API key, or
+environment variable. Distributed mode additionally needs Redis.
 
 ## 2. Verify the Installation
 

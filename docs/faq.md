@@ -56,10 +56,10 @@ Not necessarily.
 
 Redis and Remem solve different problems.
 
-Many applications may benefit from using both:
-
-* Redis for exact-key caching.
-* Remem for semantic execution reuse.
+Redis remains the data service; Remem supplies embeddings, compatibility policy,
+and response/retrieval/miss decisions. Since 1.2, Remem can optionally use Redis
+as its shared record and coordination backend while local mode remains the
+zero-service default.
 
 ---
 
@@ -81,18 +81,20 @@ Currently implemented storage options are:
 
 * `JsonStorage` for local JSON-file persistence
 * `InMemoryStorage` for volatile in-process storage
+* `RedisStorage` for optional multi-instance distributed mode
 * Custom storage implementations via `StorageInterface`
 
-SQLite, PostgreSQL, Redis, and cloud/object storage backends are planned or can be implemented by users as custom backends, but they do not ship as built-in backends today.
+SQLite, PostgreSQL, and cloud/object storage remain future or custom backends.
 
 ---
 
 ## Can I use Remem in production?
 
-Remem `1.1.0` is a stable release. Its local-first exact and optional ANN paths
-are suitable for production workloads that fit the documented ownership model.
-
-The current implementation is most appropriate for a single process using local JSON or in-memory storage. Threads sharing one `Client` are lifecycle-serialized, but multi-process index writers, distributed coordination, and strict database-grade durability are outside this release. For those requirements, implement a custom storage backend and keep ANN persistence owned by one process.
+Remem `1.2.0` is stable for workloads that fit the documented mode boundaries.
+Local exact and ANN behavior retains the 1.1 ownership model. Redis distributed
+mode provides bounded shared caches, eventual consistency, local fallback, and
+best-effort request coalescing; it does not provide distributed ANN, durable
+fallback queues, multi-region consistency, or database-grade transactions.
 
 Always refer to the latest release notes before deploying Remem in production environments.
 
@@ -109,9 +111,10 @@ Reuse decisions are based on multiple factors, including:
 
 A high similarity score alone does not guarantee reuse.
 
-The built-in policy supports `namespace`, `kb_version`, `prompt_version`, and
-`model`. Arbitrary `ExecutionContext.metadata` values are stored but are not
-implicit filters in `1.1.0`.
+The built-in policy supports `namespace`, `kb_version`, `prompt_version`,
+`model`, lightweight query signals, freshness, and explicitly required metadata
+keys. Arbitrary `ExecutionContext.metadata` values are stored but are not
+implicit filters.
 
 ---
 

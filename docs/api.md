@@ -2,7 +2,7 @@
 
 This document describes every public class, method, and configuration option in Remem. It assumes you've already completed the [Quickstart](QuickStart.md).
 
-The stable `1.1.0` public API follows [Semantic Versioning](https://semver.org/). Breaking changes will only occur in major releases. Users upgrading from `1.0.0` should also read the [v1.1 migration guide](migration-1.1.md).
+The stable `1.2.0` public API follows [Semantic Versioning](https://semver.org/). Breaking changes occur only in major releases. Local users upgrading from 1.1 require no data migration; see the [v1.2 migration guide](migration-1.2.md) before enabling Redis.
 
 ## Table of Contents
 
@@ -13,8 +13,9 @@ The stable `1.1.0` public API follows [Semantic Versioning](https://semver.org/)
 5. [ReuseDecision](#reusedecision)
 6. [ExecutionResult](#executionresult)
 7. [ExecutionRecord](#executionrecord)
-8. [Storage Backends](#storage-backends)
-9. [Environment Variables](#environment-variables)
+8. [Distributed Mode](#distributed-mode)
+9. [Storage Backends](#storage-backends)
+10. [Environment Variables](#environment-variables)
 
 ---
 
@@ -32,6 +33,8 @@ Client(
     ann_config: AnnConfig | None = None,
     *,
     search_mode: SearchMode | str = SearchMode.AUTO,
+    distributed: DistributedConfig | None = None,
+    distributed_backend: DistributedBackend | None = None,
 )
 ```
 
@@ -42,6 +45,8 @@ Client(
 | `similarity_backend` | `None` | Deprecated compatibility alias for `"exact"` or `"hnsw"`. Do not combine it with a non-auto `search_mode`. |
 | `ann_config` | `None` | Optional `AnnConfig` tuning for the HNSW backend. Ignored for exact search. |
 | `search_mode` | `"auto"` | `"auto"`, `"exact_cosine"`, or `"hnsw_cosine"`. Enum members from `SearchMode` are also accepted. |
+| `distributed` | `None` | Optional Redis and coordination configuration. Omit for unchanged local mode. |
+| `distributed_backend` | `None` | Advanced backend injection point used with an enabled distributed config. The built-in default is `RedisStorage`. |
 
 `auto` uses HNSW when USearch is installed and otherwise resolves to exact cosine. Resolution is observable through `client.search_mode`, `client.resolved_search_mode`, `client.search_fallback_reason`, and the combined immutable `client.search_resolution` value. No dataset-size threshold is applied.
 
@@ -181,6 +186,12 @@ client.load_snapshot()   # reload records from disk
 
 `InMemoryStorage` silently ignores both calls.
 
+### `distributed_status`
+
+In distributed mode, this read-only property returns `enabled`, `backend`,
+`node_id`, current `healthy` state, in-process `pending_operations`, and
+`last_error`. Local clients return `{"enabled": False}`.
+
 ---
 
 ## ExecutionContext
@@ -205,9 +216,11 @@ ExecutionContext(
 | `kb_version` | Tracks the knowledge-base version. Bump it when documents change. | `"2024-Q4"`, `"v2.1"` |
 | `prompt_version` | Tracks the prompt template version. Bump it when the prompt changes materially. | `"v3"`, `"2024-06"` |
 | `model` | The LLM used to generate the response. Prevents cross-model reuse. | `"gpt-4o"`, `"claude-3-5-sonnet"` |
-| `metadata` | Descriptive custom key-value pairs. They are not currently filtered or indexed. | `{"region": "eu-west-1"}` |
+| `metadata` | Query text, explicit signals, and application fields. Only policy-configured keys affect compatibility. | `{"query": "...", "region": "eu-west-1"}` |
 
-All fields are optional. An omitted field is simply not filtered on.
+All fields are optional. Namespace, KB version, prompt version, and model use
+the built-in policy switches. Arbitrary metadata is not an implicit filter;
+configure `required_metadata_keys` when a field is a reuse dependency.
 
 ---
 
@@ -225,6 +238,21 @@ ReusePolicy(
     require_same_kb_version: bool = True,
     require_same_prompt_version: bool = True,
     require_same_model: bool = True,
+    required_metadata_keys: tuple[str, ...] = (),
+    enable_required_metadata_check: bool = True,
+    enable_intent_check: bool = True,
+    enable_entity_check: bool = True,
+    enable_numeric_check: bool = True,
+    enable_temporal_check: bool = True,
+    enable_negation_check: bool = True,
+    enable_directional_check: bool = True,
+    enable_output_format_check: bool = True,
+    enable_freshness_check: bool = True,
+    enable_candidate_ambiguity_check: bool = True,
+    max_response_age_seconds: float | None = None,
+    max_retrieval_age_seconds: float | None = None,
+    minimum_response_score_margin: float | None = None,
+    query_metadata_key: str = "query",
 )
 ```
 
@@ -236,6 +264,21 @@ ReusePolicy(
 | `require_same_kb_version` | `True` | Reject candidates built against a different knowledge-base version. |
 | `require_same_prompt_version` | `True` | Reject candidates generated with a different prompt template. |
 | `require_same_model` | `True` | Reject responses from a different LLM. |
+| `required_metadata_keys` | `()` | Metadata keys that must exist and match for either reuse tier. |
+| `enable_required_metadata_check` | `True` | Enable configured required-metadata comparisons. |
+| `enable_intent_check` | `True` | Reject clear response-operation or question-focus changes. |
+| `enable_entity_check` | `True` | Compare explicit or lightweight critical entities. |
+| `enable_numeric_check` | `True` | Compare numbers, percentages, currencies, and years. |
+| `enable_temporal_check` | `True` | Compare explicit or detected temporal scope. |
+| `enable_negation_check` | `True` | Detect negation and common opposite operations. |
+| `enable_directional_check` | `True` | Detect `from A to B` reversals. |
+| `enable_output_format_check` | `True` | Compare requested formats, languages, and item counts. |
+| `enable_freshness_check` | `True` | Apply configured or request-provided maximum ages. |
+| `enable_candidate_ambiguity_check` | `True` | Apply the configured top-score margin. |
+| `max_response_age_seconds` | `None` | Optional maximum record age for full responses. |
+| `max_retrieval_age_seconds` | `None` | Optional maximum record age for retrieval artifacts. |
+| `minimum_response_score_margin` | `None` | Optional minimum gap between the two best exact scores. |
+| `query_metadata_key` | `"query"` | Metadata key containing query text for lightweight checks. |
 
 Similarity is cosine similarity in the range `[-1.0, 1.0]`. For well-trained text embedding models, values above `0.90` typically represent near-identical meaning.
 
@@ -271,6 +314,7 @@ outcome.references         # list[str] — cached document IDs, if any
 outcome.similarity_score   # float — cosine similarity to the best match (0.0 for MISS)
 outcome.reason              # str — human-readable explanation of the decision
 outcome.matched_record_id  # UUID | None — ID of the matched record, if any
+outcome.diagnostics        # dict[str, Any] — structured policy/distributed trace
 ```
 
 ---
@@ -321,13 +365,57 @@ record.created_at   # datetime
 
 ---
 
+## Distributed Mode
+
+Install `remem-ai[redis]`, then pass `DistributedConfig` to `Client`:
+
+```python
+from remem import Client, DistributedConfig
+
+client = Client(
+    distributed=DistributedConfig(
+        redis_url="redis://localhost:6379/0",
+        key_prefix="my-app:prod:remem",
+        node_id="worker-1",
+    )
+)
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `enabled` | `True` | Enables distributed behavior when supplied to `Client`. |
+| `backend` | `"redis"` | Backend selector; 1.2 supports Redis. |
+| `redis_url` | environment or localhost | Redis URL, including database and optional TLS/authentication. |
+| `key_prefix` | `"remem:v1.2"` | Redis key isolation prefix. |
+| `node_id` | generated | Source node recorded in distributed envelopes. |
+| `local_cache` | `True` | Cache successful remote reads/writes in the local backend. |
+| `sync_on_read` | `True` | Replace local read-through state with the remote snapshot. |
+| `fallback_to_local` | `True` | Continue locally and queue operations during Redis failures. |
+| `socket_timeout_seconds` | `1.0` | Redis connect/read timeout. |
+| `retry_attempts` | `1` | Additional attempts for each Redis operation. |
+| `retry_delay_seconds` | `0.05` | Delay between attempts. |
+| `record_ttl_seconds` | `None` | Optional logical maximum Redis record age. |
+| `duplicate_work_prevention` | `True` | Enables `get_or_compute()` coalescing. |
+| `lock_ttl_seconds` | `60.0` | Automatic computation-lock expiration. |
+| `lock_wait_timeout_seconds` | `10.0` | Maximum time a contender polls for a result. |
+| `lock_poll_interval_seconds` | `0.05` | Polling interval during contention. |
+
+Distributed `auto` mode resolves to exact cosine; explicit HNSW is rejected to
+avoid stale per-process indexes. `DistributedBackend` extends `StorageInterface`
+with health and token-lock primitives; `RedisStorage` is the built-in
+implementation. See the [distributed deployment guide](distributed.md) for the
+consistency, failure, scale, and security guarantees.
+
+---
+
 ## Storage Backends
 
 | Backend | Import | Persistence | Best For |
 |---|---|---|---|
-| `JsonStorage` (default) | `from remem import JsonStorage` | Durable — survives restarts | Production, any long-running app |
+| `JsonStorage` (default) | `from remem import JsonStorage` | Durable — survives restarts | Local long-running applications |
 | `InMemoryStorage` | `from remem import InMemoryStorage` | Volatile — lost on exit | Tests, notebooks, short-lived jobs |
-| Custom | Subclass `StorageInterface` | Your choice | Redis, Postgres, S3, or another system you implement |
+| `RedisStorage` | `from remem import RedisStorage` | Shared Redis records | Distributed mode through `DistributedConfig` |
+| Custom | Subclass `StorageInterface` | Your choice | Postgres, S3, or another system you implement |
 
 **`JsonStorage` details:**
 
@@ -365,7 +453,9 @@ class MyStorage(StorageInterface):
 
 ## Environment Variables
 
-Remem does not require or read any environment variables. All configuration is code-based, via `Client`, `ReusePolicy`, and `ExecutionContext`.
+Local Remem does not require environment variables. Distributed mode reads
+`REMEM_REDIS_URL` only when `DistributedConfig.redis_url` is not explicitly
+provided. The fallback value is `redis://localhost:6379/0`.
 
 ---
 
@@ -397,5 +487,12 @@ Average Similarity: 0.941
 | `retrieval_reused` | Partial hits — documents cached, LLM re-run |
 | `hit_rate` | `hits / requests`, as a percentage |
 | `average_similarity` | Mean cosine similarity across all hits |
+
+Distributed snapshots additionally expose `local_cache_hits`,
+`distributed_cache_hits`, `remote_response_reused`, `remote_retrieval_reused`,
+`distributed_misses`, `synchronization_events`, `synchronization_failures`,
+`backend_failures`, `invalid_distributed_records`, `fallback_to_local`,
+`lock_acquisitions`, `lock_contentions`, `lock_timeouts`, and
+`duplicate_work_avoided`. These remain zero for local-only clients.
 
 Metrics are in-process only and reset when `Client` is re-instantiated. To persist them, forward `snapshot()` values to your own observability system.

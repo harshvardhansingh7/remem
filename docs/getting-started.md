@@ -89,7 +89,7 @@ After installation, confirm the package is available and on the expected version
 
 ```python
 import remem
-print(remem.__version__)   # 1.1.0
+print(remem.__version__)   # 1.2.0
 ```
 
 Or from a terminal:
@@ -101,7 +101,7 @@ python -c "import remem; print(remem.__version__)"
 Expected output:
 
 ```
-1.1.0
+1.2.0
 ```
 
 If you see `ModuleNotFoundError`, double-check that the correct virtual environment is activated.
@@ -156,7 +156,7 @@ Remem does not compare every stored record against every new request. Before com
 - `prompt_version` — excludes results generated with a different prompt template
 - `model` — excludes responses from a different LLM
 
-This means you do not need to delete records to invalidate a knowledge-base generation. Bump `kb_version` in your `ExecutionContext` and Remem will route new requests to the full pipeline until that version has been queried. Arbitrary `context.metadata` values are descriptive only in `1.1.0`; they are not implicit filters.
+This means you do not need to delete records to invalidate a knowledge-base generation. Bump `kb_version` in your `ExecutionContext` and Remem will route new requests to the full pipeline until that version has been queried. Arbitrary `context.metadata` values are not implicit filters; configure `ReusePolicy.required_metadata_keys` for application dependencies.
 
 ---
 
@@ -518,7 +518,7 @@ ExecutionContext(
 | `kb_version` | Tracks the knowledge-base version. Bump when documents change. | `"2024-Q4"`, `"v2.1"` |
 | `prompt_version` | Tracks the prompt template version. Bump when the prompt changes significantly. | `"v3"`, `"2024-06"` |
 | `model` | The LLM used to generate the response. Prevents cross-model reuse. | `"gpt-4o"`, `"claude-3-5-sonnet"` |
-| `metadata` | Descriptive custom values; not filtered or indexed in `1.1.0`. | `{"region": "eu-west-1"}` |
+| `metadata` | Query signals and custom values; only policy-configured keys affect compatibility. | `{"query": "...", "region": "eu-west-1"}` |
 
 All fields are optional. An omitted field means the policy does not filter on it.
 
@@ -621,7 +621,8 @@ record.created_at   # datetime
 |---|---|---|---|
 | `JsonStorage` | `from remem import JsonStorage` | Durable (file on disk) | Production, any persistent workload |
 | `InMemoryStorage` | `from remem import InMemoryStorage` | Volatile (RAM only) | Tests, notebooks, CI pipelines |
-| Custom | Subclass `StorageInterface` | Your choice | Redis, Postgres, S3, or another system you implement |
+| `RedisStorage` | `from remem import RedisStorage` | Shared | Optional distributed mode |
+| Custom | Subclass `StorageInterface` | Your choice | Postgres, S3, or another system you implement |
 
 **`JsonStorage` details:**
 - Default file path: `remem_store.json` in the current working directory
@@ -720,7 +721,7 @@ HNSW performs candidate discovery only; final scores, ordering, and thresholds
 use exact cosine. Indexes are partitioned by namespace. Persistence is a derived
 cache owned by one process and rebuilds automatically from authoritative storage
 when stale, corrupt, or incompatible. See the [API reference](api.md#ann-configuration)
-and [v1.1 migration guide](migration-1.1.md).
+and [v1.2 migration guide](migration-1.2.md).
 
 ### Bypass Remem for a single request
 
@@ -855,7 +856,9 @@ Remem does not observe your pipeline automatically when using `check()`. You mus
 ## 13. Frequently Asked Questions
 
 **Do I need Redis or a separate database to run Remem?**
-No. Remem ships with `JsonStorage` (file-backed) and `InMemoryStorage` (in-process). No external service is required. You can implement a custom backend later if you need Redis, Postgres, or S3.
+No. Local mode still ships with `JsonStorage` and `InMemoryStorage` and needs no
+external service. Install `remem-ai[redis]` only when multiple instances should
+share a distributed cache; see the [distributed guide](distributed.md).
 
 **Does Remem work with any LLM or embedding model?**
 Yes. Remem is model-agnostic. It takes a `list[float]` embedding vector as input — any embedding model that produces dense float vectors is compatible.

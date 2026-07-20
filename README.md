@@ -8,7 +8,7 @@
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10+-blue.svg">
-  <img alt="Version" src="https://img.shields.io/badge/Version-v1.1.0-orange">
+  <img alt="Version" src="https://img.shields.io/badge/Version-v1.2.0-orange">
   <img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-green.svg">
   <img alt="PyPI" src="https://img.shields.io/badge/PyPI-remem--ai-blue">
 </p>
@@ -45,7 +45,7 @@ Remem answers: *"Have I already done similar expensive AI work before?"*
 |---|---|---|
 | Matching strategy | Exact key | Semantic similarity (embeddings) |
 | Scope | Key-value lookup | Full AI pipeline reuse |
-| Deployment | Separate service | Python library — import and go |
+| Deployment | Separate service | Local Python library, optionally backed by Redis |
 | AI-aware | No | Yes — understands embeddings, models, and prompts |
 
 ## How It Works
@@ -74,6 +74,9 @@ For the full decision model, thresholds, and configuration options, see the [Arc
 - **Durable persistence** — a file-backed store that survives process restarts, with atomic writes
 - **In-memory mode** — zero-disk-I/O storage for tests, notebooks, and short-lived jobs
 - **Pluggable storage** — bring your own backend by implementing `StorageInterface`
+- **Optional distributed cache** — share safe response and retrieval reuse across application instances through Redis
+- **Duplicate-work coalescing** — expiring token locks reduce simultaneous identical `get_or_compute()` work
+- **Graceful fallback** — continue locally during Redis outages and replay pending writes after reconnect
 - **Built-in telemetry** — hit rate, reuse breakdown, and average similarity, out of the box
 - **Minimal footprint** — a single runtime dependency (`numpy`)
 
@@ -91,6 +94,12 @@ For optional HNSW approximate-nearest-neighbor search, install the ANN extra:
 
 ```bash
 pip install "remem-ai[ann]"
+```
+
+For the optional Redis distributed cache, install the Redis extra:
+
+```bash
+pip install "remem-ai[redis]"
 ```
 
 <details>
@@ -163,6 +172,35 @@ conservative guardrails, not proof that two responses are interchangeable;
 calibrate them on application labels and place dependency state in
 `required_metadata_keys`.
 
+### Optional distributed cache
+
+Point multiple clients at the same Redis key prefix to share reusable work:
+
+```python
+from remem import Client, DistributedConfig, ExecutionContext
+
+distributed = DistributedConfig(
+    redis_url="redis://localhost:6379/0",  # or set REMEM_REDIS_URL
+    key_prefix="my-app:remem",
+    node_id="worker-1",
+)
+client = Client(distributed=distributed)
+
+context = ExecutionContext(
+    namespace="support",
+    metadata={"query": query},
+)
+outcome = client.get_or_compute(embed(query), my_pipeline, context)
+```
+
+Distributed mode is optional and preserves the existing reuse policy. Redis is
+the shared record and coordination layer; Remem still performs semantic
+matching and response/retrieval/miss decisions. `auto` resolves to exact cosine
+in distributed mode so every query sees current remote records. Redis outages
+fall back to local operation by default, with in-process pending writes replayed
+on reconnect. See the [distributed deployment guide](docs/distributed.md) for
+consistency, locking, security, and scale limits.
+
 ### Optional ANN search
 
 `auto` is the default: it uses HNSW when the optional dependency is installed and otherwise falls back to exact cosine. You can also force either strategy:
@@ -192,7 +230,7 @@ Client-mediated inserts, embedding replacements, and deletions update HNSW incre
 
 HNSW is partitioned by `ExecutionContext.namespace`. With the default strict policy, queries search only the matching namespace. Within it, Remem applies `kb_version`, `prompt_version`, and `model` eligibility before storage lookup and expands ANN discovery geometrically until it has enough eligible candidates or exhausts the partition. This avoids false misses caused by a fixed global overfetch multiplier while keeping final scoring exact. If `require_same_namespace=False`, all namespace partitions are searched and their eligible candidates are exact-reranked together. Arbitrary `ExecutionContext.metadata` is not an implicit filter; only fields explicitly represented by `ReusePolicy` affect eligibility.
 
-Upgrading from `1.0.0` requires no JSON storage migration. See the [v1.1 migration guide](docs/migration-1.1.md) for search-mode adoption, optional persistence, compatibility notes, and operational limits.
+Local users need no migration. See [Migrating to v1.2](docs/migration-1.2.md) for distributed-mode adoption and compatibility notes.
 
 ## Documentation
 
@@ -201,11 +239,13 @@ Upgrading from `1.0.0` requires no JSON storage migration. See the [v1.1 migrati
 | [Quickstart](docs/QuickStart.md) | Get a working integration in under five minutes |
 | [API Reference](docs/api.md) | Every class, method, and configuration option |
 | [Architecture](docs/architecture.md) | How Remem is designed internally |
+| [Distributed deployment](docs/distributed.md) | Redis setup, consistency, failures, and multi-node operation |
 | [Benchmarks](docs/benchmarks.md) | What Remem measures and why |
 | [Roadmap](docs/roadmap.md) | Where the project is headed |
 | [FAQ](docs/faq.md) | Common questions |
 | [Troubleshooting](docs/troubleshooting.md) | Fixes for common issues |
 | [Migrating to v1.1](docs/migration-1.1.md) | Upgrade, compatibility, persistence, and operational notes |
+| [Migrating to v1.2](docs/migration-1.2.md) | Optional Redis adoption and distributed guarantees |
 
 ## Real-world evaluation
 
@@ -221,11 +261,21 @@ configuration, hardware, and result file have been reviewed.
 From a source checkout, install development dependencies and run the test suite:
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[ann,redis,dev]"
 python -m pytest -v
 ```
 
-The tests cover exact and ANN search, persistence, serialization, direct record lookup, incremental mutation, corruption recovery, and policy filtering. Stable-release quality checks are:
+The tests cover exact and ANN search, persistence, serialization, policy
+filtering, multi-client coordination, outage fallback, lock contention, and
+Redis record validation. Real Redis tests run when `REMEM_TEST_REDIS_URL` is
+configured:
+
+```bash
+REMEM_TEST_REDIS_URL=redis://localhost:6379/15 \
+  python -m pytest tests/integration/test_redis_distributed.py -v
+```
+
+Stable-release quality checks are:
 
 ```bash
 python -m ruff check .

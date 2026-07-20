@@ -48,6 +48,41 @@ client.check(embedding)
 
 Exact search filters all stored records through `ReusePolicy` before cosine calculation. ANN records are physically partitioned by namespace. The default strict policy searches only the requested namespace; relaxing `require_same_namespace` searches all partitions. Within each selected partition, policy eligibility for namespace, knowledge-base version, prompt version, and model is computed from index-side record metadata before storage lookup. Candidate discovery starts at `candidate_count` and expands geometrically until it has enough eligible IDs or exhausts that partition. Storage resolves only those eligible IDs, and Remem then calculates exact cosine similarity. Incompatible records are never fetched for reranking or returned.
 
+## Distributed request flow
+
+Distributed mode composes the existing layers instead of adding a second reuse
+engine:
+
+```text
+Client A local state ----+
+                         +--> DistributedStorage --> RedisStorage
+Client B local state ----+             |
+                                       v
+                              existing exact search
+                                       |
+                              MetadataMatcher + ReusePolicy
+                                       |
+                    RESPONSE_REUSED / RETRIEVAL_REUSED / MISS
+```
+
+`DistributedStorage` implements the existing `StorageInterface`. It writes Redis
+first, maintains optional local read-through/fallback state, and replays
+in-process pending mutations after reconnect. Redis stores versioned JSON
+envelopes in a namespaced hash; malformed, expired, or incompatible envelopes
+are removed. Record UUIDs provide last-write-wins identity.
+
+The consistency model is eventual. A healthy read sees current Redis records on
+the next request. During an outage, fallback-enabled nodes use local state and
+queue writes, but that queue is not durable across process termination.
+`get_or_compute()` adds best-effort coalescing with expiring Redis token locks
+and deterministic record IDs. Lock timeout or backend failure falls back to
+normal computation, preserving availability.
+
+Distributed mode uses exact cosine. Per-process HNSW cannot safely discover
+another node's writes, so distributed `auto` resolves to exact and explicit
+HNSW is rejected. This keeps the existing policy authoritative rather than
+serving from a stale graph.
+
 ## Core Components
 
 ### SDK / Client
@@ -88,7 +123,7 @@ The default `search_mode="auto"` selects USearch HNSW when the optional ANN extr
 
 HNSW performs candidate discovery only. Remem resolves eligible candidate records with an ordered batch ID lookup, recalculates exact cosine similarity, sorts by those exact scores, and then applies reuse thresholds. This preserves the existing `[-1.0, 1.0]` thresholds and `ReuseOutcome.similarity_score` semantics without claiming exhaustive nearest-neighbor recall. `AnnConfig.candidate_count` controls the initial eligible-candidate target per selected partition and defaults to 50. Adaptive expansion is conservative: it removes fixed-overfetch false misses for structured policy fields, but may search an entire namespace partition when compatible records are sparse.
 
-Execution records remain authoritative in storage. Within each namespace partition, every UUID maps to a stable monotonic integer HNSW key. Inserts use native `add`; embedding changes use compacting native removal followed by insertion with the same key; deletes use compacting native removal; and KB/prompt/model or response-only changes update cached record state without touching the graph. A namespace change removes the UUID from its old partition and inserts it into the new partition. Storage is mutated first under a client lifecycle lock. If ANN mutation fails, storage is rolled back and affected graphs are deterministically rebuilt; recovery failure raises `AnnMutationError`. Full rebuilds remain for unpersisted startup, explicit reload, validation failure, and recovery. This protects threads using one `Client`, but direct external mutation of the injected storage and multi-process coordination are not supported.
+Execution records remain authoritative in storage. Within each namespace partition, every UUID maps to a stable monotonic integer HNSW key. Inserts use native `add`; embedding changes use compacting native removal followed by insertion with the same key; deletes use compacting native removal; and KB/prompt/model or response-only changes update cached record state without touching the graph. A namespace change removes the UUID from its old partition and inserts it into the new partition. Storage is mutated first under a client lifecycle lock. If ANN mutation fails, storage is rolled back and affected graphs are deterministically rebuilt; recovery failure raises `AnnMutationError`. Full rebuilds remain for unpersisted startup, explicit reload, validation failure, and recovery. This protects threads using one local HNSW `Client`, but direct external mutation of its injected storage and multi-process HNSW coordination are not supported. Distributed mode uses the separate exact-search flow described above.
 
 Native persistence is opt-in through `AnnConfig.persistence_path`. The default empty namespace uses that base path; named namespaces use SHA-256-derived filenames under `<path>.partitions/`, avoiding raw tenant names in filenames. Each native USearch graph and versioned JSON metadata file form one independently recoverable derived generation. The metadata records the engine/configuration identity, vector dimension, storage fingerprint, UUID-to-key mapping, next monotonic key, native size, and SHA-256 of the graph. It deliberately excludes responses, references, and arbitrary context metadata. The graph temporary file is atomically replaced first and metadata is committed last; a crash between replacements leaves a checksum mismatch rather than silently accepting mixed generations. Missing metadata, stale storage, incompatible configuration or dimension, invalid mappings, missing native data, size mismatch, parse errors, and checksum failures trigger a rebuild of the affected namespace from storage and an atomic rewrite.
 
@@ -108,9 +143,12 @@ Abstracted behind `StorageInterface` (`remem/storage/storage.py`), so the reuse 
 |---|---|---|
 | `JsonStorage` | `remem/storage/json_storage.py` | Durable — atomic file writes |
 | `InMemoryStorage` | `remem/storage/memory_storage.py` | Volatile — in-process only |
+| `RedisStorage` | `remem/distributed/redis_storage.py` | Shared Redis record hash |
+| `DistributedStorage` | `remem/distributed/storage.py` | Local/remote coordination and fallback |
 | `Serializer` | `remem/storage/serializer.py` | JSON round-trip for `ExecutionRecord` |
 
-Planned backends include SQLite, PostgreSQL, Redis, and cloud object storage.
+Future backends may include SQLite, PostgreSQL, cloud object storage, and a
+distributed vector index.
 
 ### Observability
 
@@ -152,14 +190,16 @@ Full field-by-field documentation lives in the [API Reference](api.md).
 
 **Explainable.** Every `ReuseOutcome` carries a `reason` and a `similarity_score` — reuse decisions are never a black box.
 
-**Production-conscious.** Local single-process deployments have explicit consistency and recovery guarantees; distributed ownership remains a separate roadmap concern.
+**Production-conscious.** Local and distributed modes publish their different
+consistency, ownership, recovery, and scaling boundaries rather than implying
+database-grade guarantees.
 
 ## Future Architecture
 
 The longer-term direction includes:
 
-- Distributed, multi-process, and multi-node cache coordination
-- Cloud-native storage and synchronization
+- Remote vector candidate discovery for large distributed caches
+- Cloud-native storage, Redis Cluster, and multi-region synchronization
 - Multi-tenant deployment primitives
 - A dedicated benchmarking suite
 

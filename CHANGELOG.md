@@ -7,10 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased]
+## [1.2.0] - 2026-07-20
 
 ### Added
 
+- Optional Redis distributed semantic cache through `remem-ai[redis]`, using
+  versioned record envelopes and application-scoped key prefixes.
+- Local read-through/fallback coordination with in-process write replay after
+  Redis reconnect, configurable retries, timeouts, fail-open/fail-closed mode,
+  and logical record expiration.
+- Best-effort duplicate-work prevention for `get_or_compute()` using expiring
+  token-owned Redis locks and deterministic distributed record IDs.
+- Cross-node response and retrieval reuse through the existing `ReusePolicy`,
+  with distributed decision traces and backend/lock/synchronization metrics.
+- Real Redis 7 integration tests in CI, a two-node example, deployment guide,
+  and 1.1-to-1.2 migration guide.
 - Dependency-light multi-signal response safeguards for intent, critical
   entities and values, temporal scope, negation, direction, requested output
   format, freshness, required metadata, and candidate-score ambiguity.
@@ -22,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Distributed `search_mode="auto"` resolves to exact cosine for coherent remote
+  visibility; explicit distributed HNSW is rejected because its per-process
+  index cannot safely observe remote writes.
+- Local-only behavior, imports, storage defaults, and search-mode resolution
+  remain unchanged when `DistributedConfig` is omitted.
 - A response-ineligible but retrieval-compatible match now falls back to
   retrieval reuse instead of serving the cached response. Existing callers
   without query metadata retain threshold-only behavior.

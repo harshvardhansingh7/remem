@@ -20,6 +20,27 @@ Persistent ANN files are derived caches. Keep the authoritative JSON or custom
 storage data during recovery; deleting only the ANN files is safe because Remem
 will rebuild them on the next HNSW client initialization.
 
+**Redis extra is unavailable**
+Install `pip install "remem-ai[redis]"`. The base package intentionally does not
+install or import `redis-py` for local users.
+
+**Distributed status reports unhealthy or pending operations**
+Inspect `client.distributed_status["last_error"]`, verify the Redis URL, TLS,
+credentials, ACLs, DNS, and network timeout, then call `client.all()` or process
+another request after connectivity returns. With fallback enabled, pending
+in-process writes replay before the next successful remote snapshot. They do
+not survive process termination.
+
+**Distributed mode rejects HNSW**
+Use `search_mode="auto"` or `"exact_cosine"`. Remem 1.2 intentionally avoids a
+per-process HNSW graph in distributed mode because it cannot observe another
+node's writes coherently.
+
+**Redis memory or query latency grows with record count**
+Use `record_ttl_seconds`, distinct bounded key prefixes, and application-level
+cleanup. Version 1.2 performs an O(n) Redis hash snapshot for exact semantic
+search and is not a large-scale distributed vector database.
+
 ## Unexpected Behavior
 
 **Unexpected `MISS` decisions**

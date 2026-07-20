@@ -8,9 +8,9 @@ This roadmap outlines the long-term vision for Remem. The project is developed i
 |---|---|---|
 | v1.0.0-beta | Local-first AI work reuse engine for early adopters | Completed |
 | v1.0.0 | Stable local-first AI work reuse engine | Completed |
-| v1.1.0 | Production-ready optional ANN search | **Current release** |
-| v1.2.0 | Distributed semantic cache | Planned |
-| v1.3.0 | Additional storage backends (Redis, Postgres, S3) | Planned |
+| v1.1.0 | Production-ready optional ANN search | Completed |
+| v1.2.0 | Redis-backed distributed semantic cache | **Current release** |
+| v1.3.0 | Distributed scale and additional storage backends | Planned |
 | v1.4.0 | Advanced policy engine with ML-based thresholds | Planned |
 | v2.0.0 | Multi-tenant support and cloud-native deployment | Planned |
 
@@ -31,6 +31,10 @@ This roadmap outlines the long-term vision for Remem. The project is developed i
 - Incremental and persistent namespace-partitioned ANN indexes
 - Validated fast reload, consistency recovery, and structured-policy filtering
 - Python 3.10, 3.11, and 3.12 CI coverage with lint, type, and package checks
+- Optional Redis shared storage with local fallback and reconnect replay
+- Cross-node response and retrieval reuse through the existing policy engine
+- Best-effort duplicate-work coalescing with expiring token locks
+- Distributed metrics and real Redis integration coverage
 
 **Planned**
 
@@ -41,7 +45,8 @@ This roadmap outlines the long-term vision for Remem. The project is developed i
 *Storage*
 - SQLite backend
 - PostgreSQL backend
-- Redis backend
+- Remote vector candidate discovery and distributed ANN alternatives
+- Redis Cluster and larger-cache pagination/partitioning
 
 *Developer experience*
 - Improved configuration ergonomics
@@ -51,9 +56,8 @@ This roadmap outlines the long-term vision for Remem. The project is developed i
 
 ## Version 2.x — Production Deployments
 
-- Distributed cache
-- Remote storage
-- Multi-process synchronization
+- Multi-region cache coordination
+- Durable fallback queues
 - Async API
 - Streaming support
 - Horizontal scalability
