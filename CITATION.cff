@@ -18,9 +18,9 @@ url: "https://github.com/hrsvd/remem"
 
 license: "Apache-2.0"
 
-version: "1.1.0"
+version: "1.2.0"
 
-date-released: "2026-07-14"
+date-released: "2026-07-20"
 
 abstract: >
   Remem is an AI-native work reuse engine that reduces latency and inference

@@ -20,6 +20,9 @@ Quickstart::
 """
 
 from remem.client import Client
+from remem.distributed.backend import DistributedBackend
+from remem.distributed.config import DistributedConfig
+from remem.distributed.redis_storage import RedisStorage
 from remem.models.execution_context import ExecutionContext
 from remem.models.execution_record import ExecutionRecord
 from remem.models.execution_result import ExecutionResult
@@ -31,7 +34,7 @@ from remem.storage.json_storage import JsonStorage
 from remem.storage.memory_storage import InMemoryStorage
 from remem.storage.storage import StorageInterface
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     # Core facade
@@ -49,6 +52,10 @@ __all__ = [
     "AnnIndexStats",
     "SearchMode",
     "SearchModeResolution",
+    # Distributed cache
+    "DistributedBackend",
+    "DistributedConfig",
+    "RedisStorage",
     # Storage backends
     "StorageInterface",
     "JsonStorage",

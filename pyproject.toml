@@ -50,6 +50,12 @@ dev = [
 ann = [
     "usearch>=2.17",
 ]
+redis = [
+    "redis>=5.0,<9",
+]
+distributed = [
+    "redis>=5.0,<9",
+]
 benchmark = [
     "datasets>=2.20",
     "matplotlib>=3.7",
@@ -101,6 +107,9 @@ line-ending = "auto"
 [tool.pytest.ini_options]
 # Correct path configuration for pytest
 pythonpath = ["."]
+markers = [
+    "integration: requires an external service such as Redis",
+]
 
 [tool.mypy]
 python_version = "3.10"

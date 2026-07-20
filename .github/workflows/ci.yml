@@ -111,3 +111,37 @@ jobs:
       - name: Run suite with ANN backend
         run: |
           python -m pytest -v
+
+  redis-test:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Redis and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[redis,dev]"
+
+      - name: Run Redis integration suite
+        env:
+          REMEM_TEST_REDIS_URL: redis://localhost:6379/15
+        run: |
+          python -m pytest tests/integration/test_redis_distributed.py -v

@@ -2,6 +2,10 @@ import warnings
 from typing import Callable, Literal, Optional
 from uuid import UUID
 
+from remem.distributed.backend import DistributedBackend
+from remem.distributed.config import DistributedConfig
+from remem.distributed.redis_storage import RedisStorage
+from remem.distributed.storage import DistributedStorage
 from remem.metrics.collector import MetricsCollector
 from remem.models.execution_context import ExecutionContext
 from remem.models.execution_record import ExecutionRecord
@@ -12,6 +16,7 @@ from remem.similarity.engine import SimilarityEngine
 from remem.similarity.index import AnnConfig, AnnIndexStats
 from remem.similarity.mode import SearchMode, SearchModeResolution, resolve_search_mode
 from remem.storage.json_storage import JsonStorage
+from remem.storage.memory_storage import InMemoryStorage
 from remem.storage.storage import StorageInterface
 
 
@@ -26,9 +31,17 @@ class Client:
         ann_config: Optional[AnnConfig] = None,
         *,
         search_mode: SearchMode | str = SearchMode.AUTO,
+        distributed: Optional[DistributedConfig] = None,
+        distributed_backend: Optional[DistributedBackend] = None,
     ):
-        # Default directly to file-backed JSON persistence or use an injected backend
-        self.storage: StorageInterface = storage_backend or JsonStorage()
+        self.metrics = MetricsCollector()
+        self.storage: StorageInterface
+        self.distributed_config = distributed
+        distributed_enabled = distributed is not None and distributed.enabled
+        if distributed_backend is not None and not distributed_enabled:
+            raise ValueError(
+                "distributed_backend requires an enabled DistributedConfig"
+            )
         if similarity_backend is not None:
             if similarity_backend not in ("exact", "hnsw"):
                 raise ValueError("similarity_backend must be either 'exact' or 'hnsw'.")
@@ -48,17 +61,60 @@ class Client:
                 "hnsw": SearchMode.HNSW_COSINE,
             }[similarity_backend]
 
-        resolution, backend = resolve_search_mode(search_mode)
+        if distributed_enabled:
+            requested_mode = SearchMode(search_mode)
+            if requested_mode is SearchMode.HNSW_COSINE:
+                raise ValueError(
+                    "Distributed mode requires search_mode='exact_cosine' or 'auto'; "
+                    "per-process HNSW indexes cannot safely observe remote writes."
+                )
+            reason = None
+            if requested_mode is SearchMode.AUTO:
+                reason = (
+                    "Distributed mode selected exact cosine search so remote writes "
+                    "are visible without a stale per-process ANN index."
+                )
+            resolution = SearchModeResolution(
+                requested=requested_mode,
+                resolved=SearchMode.EXACT_COSINE,
+                fallback_reason=reason,
+            )
+            backend: Literal["exact", "hnsw"] = "exact"
+        else:
+            resolution, backend = resolve_search_mode(search_mode)
         self.search_resolution: SearchModeResolution = resolution
         self.search_mode = resolution.requested
         self.resolved_search_mode = resolution.resolved
         self.search_fallback_reason = resolution.fallback_reason
         self.similarity = SimilarityEngine(backend, ann_config)
         self.policy = policy or ReusePolicy()
-        self.metrics = MetricsCollector()
+        if distributed_enabled:
+            assert distributed is not None
+            local_storage = storage_backend or InMemoryStorage()
+            remote_storage = distributed_backend or RedisStorage(distributed)
+            self.storage = DistributedStorage(
+                local_storage, remote_storage, distributed, self.metrics
+            )
+        else:
+            self.storage = storage_backend or JsonStorage()
         self.reuse_planner = ReuseEngine(
             self.storage, self.similarity, self.policy, self.metrics
         )
+
+    @property
+    def distributed_status(self) -> dict[str, object]:
+        """Return current distributed mode, node, and fallback health state."""
+
+        if not isinstance(self.storage, DistributedStorage):
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "backend": self.storage.config.backend,
+            "node_id": self.storage.config.node_id,
+            "healthy": self.storage.ping(),
+            "pending_operations": self.storage.pending_operation_count,
+            "last_error": self.storage.last_backend_error,
+        }
 
     @property
     def ann_persistence_recovery_reason(self) -> Optional[str]:

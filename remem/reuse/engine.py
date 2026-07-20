@@ -1,7 +1,9 @@
+import time
 from threading import RLock
 from typing import Callable
 from uuid import UUID, uuid4
 
+from remem.distributed.storage import DistributedStorage, LockStatus
 from remem.metrics.collector import MetricsCollector
 from remem.metrics.events import MetricEvent
 from remem.models.execution_context import ExecutionContext
@@ -329,6 +331,65 @@ class ReuseEngine:
         reason = "Miss selected: " + "; ".join(retrieval_failures)
         return ReuseDecision.MISS, best, reason, diagnostics
 
+    def _record_distributed_miss(self, diagnostics: dict) -> None:
+        if isinstance(self.storage, DistributedStorage):
+            self.metrics.record(MetricEvent.DISTRIBUTED_MISS)
+            diagnostics["distributed"] = {
+                "enabled": True,
+                "source": None,
+                "fallback_active": self.storage.last_backend_error is not None,
+            }
+
+    def _cached_outcome(
+        self,
+        decision: ReuseDecision,
+        best_match: SimilarityMatch,
+        reason: str,
+        diagnostics: dict,
+        *,
+        duplicate_work_avoided: bool = False,
+    ) -> ReuseOutcome:
+        matched = best_match.entry
+        score = best_match.score
+        self.storage.increment_hit(matched.id)
+        self.metrics.record(MetricEvent.HIT, similarity=score)
+        if decision is ReuseDecision.RESPONSE_REUSED:
+            self.metrics.record(MetricEvent.RESPONSE_REUSED)
+        else:
+            self.metrics.record(MetricEvent.RETRIEVAL_REUSED)
+
+        if isinstance(self.storage, DistributedStorage):
+            source = self.storage.record_source(matched.id)
+            diagnostics["distributed"] = {
+                "enabled": True,
+                "source": source,
+                "fallback_active": self.storage.last_backend_error is not None,
+                "duplicate_work_avoided": duplicate_work_avoided,
+            }
+            if source == "remote":
+                self.metrics.record(MetricEvent.DISTRIBUTED_CACHE_HIT)
+                self.metrics.record(
+                    MetricEvent.REMOTE_RESPONSE_REUSED
+                    if decision is ReuseDecision.RESPONSE_REUSED
+                    else MetricEvent.REMOTE_RETRIEVAL_REUSED
+                )
+            else:
+                self.metrics.record(MetricEvent.LOCAL_CACHE_HIT)
+            if duplicate_work_avoided:
+                self.metrics.record(MetricEvent.DUPLICATE_WORK_AVOIDED)
+
+        return ReuseOutcome(
+            result=(
+                matched.response if decision is ReuseDecision.RESPONSE_REUSED else None
+            ),
+            decision=decision,
+            similarity_score=score,
+            reason=reason,
+            matched_record_id=matched.id,
+            references=matched.references,
+            diagnostics=diagnostics,
+        )
+
     def check(
         self,
         query_embedding: list[float],
@@ -355,6 +416,7 @@ class ReuseEngine:
         )
         if best_match is None:
             self.metrics.record(MetricEvent.MISS)
+            self._record_distributed_miss(diagnostics)
             return ReuseOutcome(
                 result=None,
                 decision=decision,
@@ -367,6 +429,7 @@ class ReuseEngine:
         score = best_match.score
         if decision is ReuseDecision.MISS:
             self.metrics.record(MetricEvent.MISS)
+            self._record_distributed_miss(diagnostics)
             return ReuseOutcome(
                 result=None,
                 decision=decision,
@@ -376,31 +439,7 @@ class ReuseEngine:
                 diagnostics=diagnostics,
             )
 
-        self.storage.increment_hit(matched.id)
-        if decision is ReuseDecision.RESPONSE_REUSED:
-            self.metrics.record(MetricEvent.HIT, similarity=score)
-            self.metrics.record(MetricEvent.RESPONSE_REUSED)
-            return ReuseOutcome(
-                result=matched.response,
-                decision=decision,
-                similarity_score=score,
-                reason=reason,
-                matched_record_id=matched.id,
-                references=matched.references,
-                diagnostics=diagnostics,
-            )
-
-        self.metrics.record(MetricEvent.HIT, similarity=score)
-        self.metrics.record(MetricEvent.RETRIEVAL_REUSED)
-        return ReuseOutcome(
-            result=None,
-            decision=decision,
-            similarity_score=score,
-            reason=reason,
-            matched_record_id=matched.id,
-            references=matched.references,
-            diagnostics=diagnostics,
-        )
+        return self._cached_outcome(decision, best_match, reason, diagnostics)
 
     def get_or_compute(
         self,
@@ -424,64 +463,126 @@ class ReuseEngine:
             matches, context
         )
 
-        if best_match is None or decision is ReuseDecision.MISS:
+        if decision is ReuseDecision.RESPONSE_REUSED:
+            assert best_match is not None
+            return self._cached_outcome(decision, best_match, reason, diagnostics)
+
+        distributed_storage = (
+            self.storage if isinstance(self.storage, DistributedStorage) else None
+        )
+        lock_token: str | None = None
+        if distributed_storage is not None:
+            status, lock_token = distributed_storage.acquire_computation_lock(
+                query_embedding, context
+            )
+            deadline = (
+                time.monotonic() + distributed_storage.config.lock_wait_timeout_seconds
+            )
+            while status is LockStatus.CONTENDED and time.monotonic() < deadline:
+                time.sleep(distributed_storage.config.lock_poll_interval_seconds)
+                refreshed_matches = self._find_compatible_matches(
+                    query_embedding, context, self.policy.retrieval_threshold
+                )
+                (
+                    refreshed_decision,
+                    refreshed_match,
+                    refreshed_reason,
+                    refreshed_diagnostics,
+                ) = self._evaluate_reuse(refreshed_matches, context)
+                if refreshed_decision is ReuseDecision.RESPONSE_REUSED:
+                    assert refreshed_match is not None
+                    return self._cached_outcome(
+                        refreshed_decision,
+                        refreshed_match,
+                        refreshed_reason,
+                        refreshed_diagnostics,
+                        duplicate_work_avoided=True,
+                    )
+                status, lock_token = distributed_storage.acquire_computation_lock(
+                    query_embedding, context
+                )
+            if status is LockStatus.CONTENDED:
+                self.metrics.record(MetricEvent.DISTRIBUTED_LOCK_TIMEOUT)
+
+            if status is LockStatus.ACQUIRED:
+                refreshed_matches = self._find_compatible_matches(
+                    query_embedding, context, self.policy.retrieval_threshold
+                )
+                (
+                    refreshed_decision,
+                    refreshed_match,
+                    refreshed_reason,
+                    refreshed_diagnostics,
+                ) = self._evaluate_reuse(refreshed_matches, context)
+                if refreshed_decision is ReuseDecision.RESPONSE_REUSED:
+                    assert refreshed_match is not None
+                    distributed_storage.release_computation_lock(
+                        query_embedding, context, lock_token or ""
+                    )
+                    return self._cached_outcome(
+                        refreshed_decision,
+                        refreshed_match,
+                        refreshed_reason,
+                        refreshed_diagnostics,
+                        duplicate_work_avoided=True,
+                    )
+
+        if decision is ReuseDecision.MISS:
             self.metrics.record(MetricEvent.MISS)
-            exec_result = compute_callback()
+            self._record_distributed_miss(diagnostics)
+        else:
+            assert best_match is not None
+            self.storage.increment_hit(best_match.entry.id)
+            self.metrics.record(MetricEvent.HIT, similarity=best_match.score)
+            self.metrics.record(MetricEvent.RETRIEVAL_REUSED)
+            if distributed_storage is not None:
+                source = distributed_storage.record_source(best_match.entry.id)
+                diagnostics["distributed"] = {
+                    "enabled": True,
+                    "source": source,
+                    "fallback_active": (
+                        distributed_storage.last_backend_error is not None
+                    ),
+                    "duplicate_work_avoided": False,
+                }
+                if source == "remote":
+                    self.metrics.record(MetricEvent.DISTRIBUTED_CACHE_HIT)
+                    self.metrics.record(MetricEvent.REMOTE_RETRIEVAL_REUSED)
+                else:
+                    self.metrics.record(MetricEvent.LOCAL_CACHE_HIT)
+
+        try:
+            computed_exec = compute_callback()
+            record_id = (
+                distributed_storage.deterministic_record_id(query_embedding, context)
+                if distributed_storage is not None
+                else uuid4()
+            )
             self.store_record(
                 ExecutionRecord(
-                    id=uuid4(),
+                    id=record_id,
                     embedding=query_embedding,
-                    references=exec_result.references,
-                    response=exec_result.response,
+                    references=computed_exec.references,
+                    response=computed_exec.response,
                     context=context,
                 )
             )
-            return ReuseOutcome(
-                result=exec_result.response,
-                decision=ReuseDecision.MISS,
-                similarity_score=best_match.score if best_match else 0.0,
-                reason=reason,
-                matched_record_id=best_match.entry.id if best_match else None,
-                references=exec_result.references,
-                diagnostics=diagnostics,
-            )
+        finally:
+            if distributed_storage is not None and lock_token is not None:
+                distributed_storage.release_computation_lock(
+                    query_embedding, context, lock_token
+                )
 
-        matched_entry = best_match.entry
-        self.storage.increment_hit(matched_entry.id)
-        score = best_match.score
-
-        if decision is ReuseDecision.RESPONSE_REUSED:
-            self.metrics.record(MetricEvent.HIT, similarity=score)
-            self.metrics.record(MetricEvent.RESPONSE_REUSED)
-            return ReuseOutcome(
-                result=matched_entry.response,
-                decision=decision,
-                similarity_score=score,
-                reason=reason,
-                matched_record_id=matched_entry.id,
-                references=matched_entry.references,
-                diagnostics=diagnostics,
-            )
-
-        # Partial hit: retrieval can be reused, re-run computation, store new result
-        self.metrics.record(MetricEvent.HIT, similarity=score)
-        self.metrics.record(MetricEvent.RETRIEVAL_REUSED)
-        computed_exec = compute_callback()
-        self.store_record(
-            ExecutionRecord(
-                id=uuid4(),
-                embedding=query_embedding,
-                references=computed_exec.references,
-                response=computed_exec.response,
-                context=context,
-            )
-        )
         return ReuseOutcome(
             result=computed_exec.response,
             decision=decision,
-            similarity_score=score,
+            similarity_score=best_match.score if best_match else 0.0,
             reason=reason,
-            matched_record_id=matched_entry.id,
-            references=matched_entry.references,
+            matched_record_id=best_match.entry.id if best_match else None,
+            references=(
+                best_match.entry.references
+                if decision is ReuseDecision.RETRIEVAL_REUSED and best_match
+                else computed_exec.references
+            ),
             diagnostics=diagnostics,
         )

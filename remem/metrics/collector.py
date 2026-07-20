@@ -15,6 +15,18 @@ class MetricsCollector:
         self._retrieval_reused: int = 0
         self._similarity_sum: float = 0.0
         self._similarity_count: int = 0
+        self._distributed: dict[MetricEvent, int] = {
+            event: 0
+            for event in MetricEvent
+            if event
+            not in {
+                MetricEvent.REQUEST,
+                MetricEvent.HIT,
+                MetricEvent.MISS,
+                MetricEvent.RESPONSE_REUSED,
+                MetricEvent.RETRIEVAL_REUSED,
+            }
+        }
 
     def record(self, event: MetricEvent, similarity: Optional[float] = None) -> None:
         """Atomically logs state updates based on emitted MetricEvents."""
@@ -31,6 +43,8 @@ class MetricsCollector:
             self._response_reused += 1
         elif event == MetricEvent.RETRIEVAL_REUSED:
             self._retrieval_reused += 1
+        elif event in self._distributed:
+            self._distributed[event] += 1
 
     def snapshot(self) -> MetricsSnapshot:
         """Generates a point-in-time, read-only MetricsSnapshot."""
@@ -49,4 +63,28 @@ class MetricsCollector:
             retrieval_reused=self._retrieval_reused,
             average_similarity=avg_sim,
             hit_rate=hit_rate,
+            local_cache_hits=self._distributed[MetricEvent.LOCAL_CACHE_HIT],
+            distributed_cache_hits=self._distributed[MetricEvent.DISTRIBUTED_CACHE_HIT],
+            remote_response_reused=self._distributed[
+                MetricEvent.REMOTE_RESPONSE_REUSED
+            ],
+            remote_retrieval_reused=self._distributed[
+                MetricEvent.REMOTE_RETRIEVAL_REUSED
+            ],
+            distributed_misses=self._distributed[MetricEvent.DISTRIBUTED_MISS],
+            synchronization_events=self._distributed[MetricEvent.DISTRIBUTED_SYNC],
+            synchronization_failures=self._distributed[
+                MetricEvent.DISTRIBUTED_SYNC_FAILURE
+            ],
+            backend_failures=self._distributed[MetricEvent.DISTRIBUTED_BACKEND_FAILURE],
+            invalid_distributed_records=self._distributed[
+                MetricEvent.DISTRIBUTED_INVALID_RECORD
+            ],
+            fallback_to_local=self._distributed[MetricEvent.FALLBACK_TO_LOCAL],
+            lock_acquisitions=self._distributed[MetricEvent.DISTRIBUTED_LOCK_ACQUIRED],
+            lock_contentions=self._distributed[MetricEvent.DISTRIBUTED_LOCK_CONTENTION],
+            lock_timeouts=self._distributed[MetricEvent.DISTRIBUTED_LOCK_TIMEOUT],
+            duplicate_work_avoided=self._distributed[
+                MetricEvent.DUPLICATE_WORK_AVOIDED
+            ],
         )
